@@ -654,6 +654,7 @@ export default function GolfPoolPro() {
   const [authSuccess,setAuthSuccess] = useState("");
   const [forgotSent,setForgotSent] = useState(false);
   const [authBusy,setAuthBusy] = useState(false);
+  const [readyBusyMap,setReadyBusyMap] = useState({});
 
   // Config for new pool creation
   const [config,setConfig] = useState({
@@ -1332,11 +1333,17 @@ export default function GolfPoolPro() {
         created: pool.created || new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"}),
       }];
     });
+    let nextMemberCount = 1;
     // Add user to pool members
     setPoolMembers(m=>{
       const existing = m[pool.id]||[];
-      if(existing.some((id)=>String(id)===String(userId))) return m;
-      const updated = {...m, [pool.id]:[...existing, userId]};
+      if(existing.some((id)=>String(id)===String(userId))) {
+        nextMemberCount = existing.length;
+        return m;
+      }
+      const updatedList = [...existing, userId];
+      nextMemberCount = updatedList.length;
+      const updated = {...m, [pool.id]:updatedList};
       LS.set("mgpp_members", updated);
       return updated;
     });
@@ -1347,7 +1354,7 @@ export default function GolfPoolPro() {
       return [...ps, {id:acct.id, name:acct.name, avatar:acct.avatar||acct.name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase(), email:acct.email, token:`inv_${acct.id}_auto`, joined:true}];
     });
     // Update pool participant count
-    setPools(ps=>ps.map(p=>p.id===pool.id?{...p,participants:Math.max(p.participants,(poolMembers[pool.id]||[]).length+1)}:p));
+    setPools(ps=>ps.map(p=>p.id===pool.id?{...p,participants:Math.max(Number(p.participants||0), nextMemberCount)}:p));
   };
 
   const ensureParticipant = (acct) => {
@@ -1482,6 +1489,8 @@ export default function GolfPoolPro() {
   const handleJoinInvitedPool = async () => {
     const userId = getEffectiveUserId();
     if (!userId || !invitePool) return;
+    if (authBusy) return;
+    setAuthBusy(true);
     try {
       if (!apiToken.get()) {
         setAuthError("Please log in to your account, then join the pool.");
@@ -1538,7 +1547,16 @@ export default function GolfPoolPro() {
       clearHash();
       notify(`Joined ${mappedPool.name}!`);
     } catch (e) {
-      setAuthError(e?.message || "Could not join this pool right now. Please try again.");
+      const msg = String(e?.message || "");
+      if (/expired|unauthorized|invalid|401|403/i.test(msg)) {
+        try { apiToken.clear(); } catch {}
+        setAuthMode("login");
+        setAuthError("Your session expired. Please log in again, then join the pool.");
+      } else {
+        setAuthError(msg || "Could not join this pool right now. Please try again.");
+      }
+    } finally {
+      setAuthBusy(false);
     }
   };
 
@@ -1604,8 +1622,8 @@ export default function GolfPoolPro() {
             </div>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               <div className="nav-user">
-                <Avatar init={currentUser ? (getEffectiveUserAvatar()||"AD") : "AD"} size={24} color="var(--gold)"/>
-                <span>{currentUser ? (getEffectiveUserName()||"Account").split(" ")[0] : "Guest"}</span>
+                <Avatar init={effectiveUserId ? (getEffectiveUserAvatar()||"AD") : "AD"} size={24} color="var(--gold)"/>
+                <span>{effectiveUserId ? (getEffectiveUserName()||"Account").split(" ")[0] : "Guest"}</span>
               </div>
               <button onClick={()=>{setShowSettings(s=>!s);setPasswordMsg("");setNewPassword("");setConfirmPassword("");}}
                 style={{padding:"5px 12px",borderRadius:20,border:`1px solid ${showSettings?"rgba(200,169,79,.5)":"rgba(255,255,255,.18)"}`,background:showSettings?"rgba(200,169,79,.15)":"rgba(255,255,255,.06)",color:showSettings?"var(--gold)":"rgba(255,255,255,.55)",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",transition:"all .15s"}}>
@@ -1853,18 +1871,28 @@ export default function GolfPoolPro() {
                               </p>
                             </div>
                             {!isReady && String(p.id) === String(effectiveUserId) && (
-                              <button className="btn-ready" onClick={async ()=>{
-                                const uid = apiSession.get()?.id || currentUser;
-                                if (apiToken.get() && activePool?.id && String(uid) === String(p.id)) {
-                                  try {
-                                    await Pools.setReady(activePool.id, true);
-                                    setPoolReadyMap(m=>({...m,[p.id]:true}));
-                                    return;
-                                  } catch {}
+                              <button
+                                className="btn-ready"
+                                disabled={!!readyBusyMap[p.id]}
+                                style={readyBusyMap[p.id] ? { opacity: 0.6, cursor: "not-allowed" } : undefined}
+                                onClick={async ()=>{
+                                if (readyBusyMap[p.id]) return;
+                                setReadyBusyMap((m) => ({ ...m, [p.id]: true }));
+                                try {
+                                  const uid = apiSession.get()?.id || currentUser;
+                                  if (apiToken.get() && activePool?.id && String(uid) === String(p.id)) {
+                                    try {
+                                      await Pools.setReady(activePool.id, true);
+                                      setPoolReadyMap(m=>({...m,[p.id]:true}));
+                                      return;
+                                    } catch {}
+                                  }
+                                  setPoolReadyMap(m=>({...m,[p.id]:true}));
+                                } finally {
+                                  setReadyBusyMap((m) => ({ ...m, [p.id]: false }));
                                 }
-                                setPoolReadyMap(m=>({...m,[p.id]:true}));
                               }}>
-                                Ready
+                                {readyBusyMap[p.id] ? "Saving..." : "Ready"}
                               </button>
                             )}
                             {!isReady && String(p.id) !== String(effectiveUserId) && (
@@ -1876,7 +1904,11 @@ export default function GolfPoolPro() {
                       })}
                     </div>
                     {!allReady && isHostOfActivePool && (
-                      <button className="btn btn-ghost btn-sm" style={{marginTop:8}} onClick={()=>{
+                      <button className="btn btn-ghost btn-sm" style={{marginTop:8}} onClick={async ()=>{
+                        if (apiToken.get() && activePool?.id) {
+                          notify("Each player must tap Ready from their own account.", "error");
+                          return;
+                        }
                         const allMap = {};
                         joinedParticipants.forEach(p=>{ allMap[p.id]=true; });
                         setPoolReadyMap(allMap);

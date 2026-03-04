@@ -42,8 +42,17 @@ app.locals.supabase = supabase;
 
 // ─── Middleware ───────────────────────────────────────────────
 app.use(helmet());
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGINS?.split(",") || ["http://localhost:3000","https://mygolfpoolpro.com"],
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true); // curl/postman/server-to-server
+    if (!allowedOrigins.length) return cb(null, true);
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(new Error("CORS origin denied"));
+  },
   credentials: true,
 }));
 app.use(express.json());

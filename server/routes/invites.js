@@ -32,7 +32,7 @@ router.get("/:token", optionalAuth, async (req, res, next) => {
       .select("*", { count: "exact", head: true })
       .eq("pool_id", pool.id);
 
-    if (count >= pool.max_participants) {
+    if (Number(count || 0) >= Number(pool.max_participants || 0)) {
       return res.status(409).json({ error: "This pool is full." });
     }
 
@@ -80,7 +80,7 @@ router.post("/:token/join", requireAuth, async (req, res, next) => {
       .from("pool_members")
       .select("*", { count: "exact", head: true })
       .eq("pool_id", pool.id);
-    if (count >= pool.max_participants) {
+    if (Number(count || 0) >= Number(pool.max_participants || 0)) {
       return res.status(409).json({ error: "This pool is full." });
     }
 
@@ -94,6 +94,7 @@ router.post("/:token/join", requireAuth, async (req, res, next) => {
     res.json({
       message: `You've joined ${pool.name}!`,
       poolId: pool.id,
+      alreadyMember: true,
     });
   } catch (e) { next(e); }
 });

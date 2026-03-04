@@ -188,6 +188,17 @@ router.patch("/:id/ready", requireAuth, async (req, res, next) => {
     const sb = req.app.locals.supabase;
     const { id } = req.params;
     const { is_ready } = req.body;
+    if (typeof is_ready !== "boolean") {
+      return res.status(400).json({ error: "is_ready must be a boolean." });
+    }
+
+    const { data: member } = await sb
+      .from("pool_members")
+      .select("user_id")
+      .eq("pool_id", id)
+      .eq("user_id", req.user.id)
+      .single();
+    if (!member) return res.status(403).json({ error: "You are not a member of this pool." });
 
     const { error } = await sb
       .from("pool_members")

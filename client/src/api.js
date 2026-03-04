@@ -20,6 +20,8 @@ const API_BASE =
   env.REACT_APP_API_URL ||
   "https://api.mygolfpoolpro.com";
 
+const REQUEST_TIMEOUT_MS = Number(env.VITE_API_TIMEOUT_MS || env.REACT_APP_API_TIMEOUT_MS || 15000);
+
 // ─── Auth token management ────────────────────────────────────
 const tokenKey = "mgpp_token";
 const sessionKey = "mgpp_user";
@@ -43,18 +45,36 @@ async function api(method, path, body = null, authed = true) {
     if (t) headers["Authorization"] = `Bearer ${t}`;
   }
 
-  const opts = { method, headers };
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const opts = { method, headers, signal: controller.signal };
   if (body) opts.body = JSON.stringify(body);
+  try {
+    const resp = await fetch(`${API_BASE}${path}`, opts);
+    const data = await resp.json().catch(() => ({}));
 
-  const resp = await fetch(`${API_BASE}${path}`, opts);
-  const data = await resp.json().catch(() => ({}));
-
-  if (!resp.ok) {
-    const err = new Error(data.error || `Request failed (${resp.status})`);
-    err.status = resp.status;
-    throw err;
+    if (!resp.ok) {
+      const err = new Error(data.error || `Request failed (${resp.status})`);
+      err.status = resp.status;
+      if (resp.status === 401 && authed) token.clear();
+      throw err;
+    }
+    return data;
+  } catch (e) {
+    if (e?.name === "AbortError") {
+      const err = new Error("Request timed out. Please try again.");
+      err.status = 408;
+      throw err;
+    }
+    if (e?.message === "Failed to fetch") {
+      const err = new Error("Network error. Check your connection and API URL.");
+      err.status = 0;
+      throw err;
+    }
+    throw e;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return data;
 }
 
 const get  = (path, authed = true) => api("GET", path, null, authed);
