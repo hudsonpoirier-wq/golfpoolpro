@@ -959,7 +959,7 @@ export default function GolfPoolPro() {
           {/* ──────── SETTINGS PANEL ──────── */}
           {showSettings && (()=>{
             const user = participants.find(p=>p.id===(currentUser||1));
-            const account = MOCK_ACCOUNTS.find(a=>a.participantId===(currentUser||1));
+            const account = accounts.find(a=>a.id===(currentUser||1));
             return (
               <div style={{position:"fixed",top:66,right:16,zIndex:400,width:320,background:"#fff",borderRadius:16,boxShadow:"0 16px 48px rgba(27,67,50,.18),0 4px 12px rgba(27,67,50,.08)",border:"1px solid rgba(27,67,50,.08)",overflow:"hidden"}}>
                 <div style={{background:"var(--forest)",padding:"18px 20px",display:"flex",alignItems:"center",gap:12}}>
