@@ -3,11 +3,79 @@ const fetch = require("node-fetch");
 
 const GOLF_COURSE_API_BASE = (process.env.GOLFCOURSE_API_BASE || "https://api.golfcourseapi.com").replace(/\/$/, "");
 const GOLF_COURSE_API_KEY = process.env.GOLFCOURSE_API_KEY || "";
+const COURSE_CACHE_TTL_MS = Number(process.env.GOLFCOURSE_CACHE_TTL_MS || 6 * 60 * 60 * 1000); // 6h
+const COURSE_TZ = process.env.GOLFCOURSE_TIMEZONE || "America/New_York";
+const DAILY_LIMIT = Number(process.env.GOLFCOURSE_DAILY_LIMIT || 300);
+const WINDOW_START_HOUR = Number(process.env.GOLFCOURSE_WINDOW_START_HOUR || 8);
+const WINDOW_END_HOUR = Number(process.env.GOLFCOURSE_WINDOW_END_HOUR || 17); // exclusive
+const WINDOW_DURATION_MS = Math.max(1, WINDOW_END_HOUR - WINDOW_START_HOUR) * 60 * 60 * 1000;
+const MIN_INTERVAL_MS = Math.max(1000, Math.floor(WINDOW_DURATION_MS / Math.max(1, DAILY_LIMIT)));
+const RESPONSE_CACHE = new Map();
+const RATE_STATE = {
+  dayKey: null,
+  count: 0,
+  nextAllowedAtMs: 0,
+};
 
 function authHeaders() {
   const headers = { Accept: "application/json" };
   if (GOLF_COURSE_API_KEY) headers.Authorization = `Key ${GOLF_COURSE_API_KEY}`;
   return headers;
+}
+
+function nowEtParts() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: COURSE_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date());
+  const get = (type) => Number(parts.find((p) => p.type === type)?.value || 0);
+  const year = get("year");
+  const month = get("month");
+  const day = get("day");
+  const hour = get("hour");
+  const minute = get("minute");
+  return {
+    dayKey: `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+    minutes: hour * 60 + minute,
+  };
+}
+
+function maybeResetDailyWindow() {
+  const { dayKey } = nowEtParts();
+  if (RATE_STATE.dayKey !== dayKey) {
+    RATE_STATE.dayKey = dayKey;
+    RATE_STATE.count = 0;
+    RATE_STATE.nextAllowedAtMs = 0;
+  }
+}
+
+function getRateDecision() {
+  maybeResetDailyWindow();
+  const { minutes } = nowEtParts();
+  const windowStartMinutes = WINDOW_START_HOUR * 60;
+  const windowEndMinutes = WINDOW_END_HOUR * 60;
+  const inWindow = minutes >= windowStartMinutes && minutes < windowEndMinutes;
+  if (!inWindow) {
+    return { ok: false, reason: "outside_window", retryAfterMs: 60 * 1000 };
+  }
+  if (RATE_STATE.count >= DAILY_LIMIT) {
+    return { ok: false, reason: "daily_limit", retryAfterMs: 60 * 1000 };
+  }
+  const now = Date.now();
+  if (now < RATE_STATE.nextAllowedAtMs) {
+    return { ok: false, reason: "spacing", retryAfterMs: RATE_STATE.nextAllowedAtMs - now };
+  }
+  return { ok: true };
+}
+
+function registerCall() {
+  RATE_STATE.count += 1;
+  RATE_STATE.nextAllowedAtMs = Date.now() + MIN_INTERVAL_MS;
 }
 
 function normalizeCourse(raw) {
@@ -46,12 +114,33 @@ function extractCourseList(payload) {
 }
 
 async function fetchJson(url) {
+  const cached = RESPONSE_CACHE.get(url);
+  if (cached && cached.expiresAt > Date.now()) return cached.payload;
+
+  const gate = getRateDecision();
+  if (!gate.ok) {
+    const err = new Error(
+      gate.reason === "outside_window"
+        ? `GolfCourseAPI calls are allowed only between ${WINDOW_START_HOUR}:00-${WINDOW_END_HOUR}:00 ${COURSE_TZ}.`
+        : gate.reason === "daily_limit"
+          ? `GolfCourseAPI daily limit reached (${DAILY_LIMIT} calls).`
+          : "GolfCourseAPI call deferred to keep calls evenly spaced."
+    );
+    err.status = 429;
+    err.retryAfterSeconds = Math.max(1, Math.ceil((gate.retryAfterMs || 1000) / 1000));
+    if (cached) return cached.payload;
+    throw err;
+  }
+
   const resp = await fetch(url, { headers: authHeaders(), timeout: 10000 });
+  registerCall();
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
     throw new Error(`GolfCourseAPI ${resp.status}: ${text || resp.statusText}`);
   }
-  return resp.json();
+  const payload = await resp.json();
+  RESPONSE_CACHE.set(url, { payload, expiresAt: Date.now() + COURSE_CACHE_TTL_MS });
+  return payload;
 }
 
 async function searchCourses(query) {
@@ -101,6 +190,10 @@ router.get("/search", async (req, res, next) => {
     const courses = await searchCourses(q);
     return res.json({ courses, provider: "golfcourseapi", count: courses.length });
   } catch (e) {
+    if (e.status === 429) {
+      res.setHeader("Retry-After", String(e.retryAfterSeconds || 60));
+      return res.status(429).json({ error: e.message, retryAfterSeconds: e.retryAfterSeconds || 60 });
+    }
     return next(e);
   }
 });
@@ -131,6 +224,10 @@ router.get("/tournament/:id", async (req, res, next) => {
 
     return res.json({ tournament, course: null, candidates: [], provider: "golfcourseapi" });
   } catch (e) {
+    if (e.status === 429) {
+      res.setHeader("Retry-After", String(e.retryAfterSeconds || 60));
+      return res.status(429).json({ error: e.message, retryAfterSeconds: e.retryAfterSeconds || 60 });
+    }
     return next(e);
   }
 });
@@ -142,6 +239,10 @@ router.get("/:id", async (req, res, next) => {
     if (!course) return res.status(404).json({ error: "Course not found." });
     return res.json({ course, provider: "golfcourseapi" });
   } catch (e) {
+    if (e.status === 429) {
+      res.setHeader("Retry-After", String(e.retryAfterSeconds || 60));
+      return res.status(429).json({ error: e.message, retryAfterSeconds: e.retryAfterSeconds || 60 });
+    }
     return next(e);
   }
 });

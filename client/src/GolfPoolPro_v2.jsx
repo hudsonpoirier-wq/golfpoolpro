@@ -697,10 +697,9 @@ export default function GolfPoolPro() {
 
     const pull = async () => {
       try {
-        const [{ golfers }, { scores }, courseResp] = await Promise.all([
+        const [{ golfers }, { scores }] = await Promise.all([
           Golfers.list(selectedTournamentId),
           Golfers.scores(selectedTournamentId),
-          Courses.forTournament(selectedTournamentId).catch(()=>({ course: null })),
         ]);
 
         setApiGolfers((golfers||[]).map(g=>({
@@ -728,7 +727,6 @@ export default function GolfPoolPro() {
           eagles: s.eagles || [0,0,0,0],
           bogeys: s.bogeys || [0,0,0,0],
         })));
-        setTournamentCourse(courseResp?.course || null);
         setLastUpdated(new Date());
       } catch {}
     };
@@ -739,6 +737,24 @@ export default function GolfPoolPro() {
     const refresh = setInterval(pull, 30000);
     return ()=>{ clearInterval(iv); clearInterval(refresh); };
   },[selectedTournamentId]);
+
+  useEffect(() => {
+    if (!selectedTournamentId) {
+      setTournamentCourse(null);
+      return;
+    }
+    let cancelled = false;
+    const loadCourse = async () => {
+      try {
+        const resp = await Courses.forTournament(selectedTournamentId);
+        if (!cancelled) setTournamentCourse(resp?.course || null);
+      } catch {
+        if (!cancelled) setTournamentCourse(null);
+      }
+    };
+    loadCourse();
+    return () => { cancelled = true; };
+  }, [selectedTournamentId]);
 
   // Require login for all non-invite screens.
   useEffect(()=>{

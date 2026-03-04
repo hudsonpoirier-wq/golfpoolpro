@@ -31,6 +31,11 @@ Optional (recommended): add GolfCourseAPI integration in `server/.env`:
 ```bash
 GOLFCOURSE_API_KEY=your-golfcourseapi-key
 GOLFCOURSE_API_BASE=https://api.golfcourseapi.com
+GOLFCOURSE_DAILY_LIMIT=300
+GOLFCOURSE_TIMEZONE=America/New_York
+GOLFCOURSE_WINDOW_START_HOUR=8
+GOLFCOURSE_WINDOW_END_HOUR=17
+GOLFCOURSE_CACHE_TTL_MS=21600000
 ```
 
 3. Start website (frontend + backend):
