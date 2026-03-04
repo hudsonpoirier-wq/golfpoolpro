@@ -14,9 +14,11 @@ router.get("/", optionalAuth, async (req, res, next) => {
         .from("tournament_scores")
         .select("golfer_id")
         .eq("tournament_id", tournament);
-      if (scoredIds?.length) {
-        query = query.in("id", scoredIds.map(s => s.golfer_id));
+      const ids = (scoredIds || []).map((s) => s.golfer_id).filter(Boolean);
+      if (!ids.length) {
+        return res.json({ golfers: [] });
       }
+      query = query.in("id", ids);
     }
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });

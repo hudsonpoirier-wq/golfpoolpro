@@ -67,6 +67,11 @@ VITE_SITE_URL=https://golfpoolpro.vercel.app
   - `GET /api/courses/search?q=augusta`
   - `GET /api/courses/:id`
   - `GET /api/courses/tournament/:id`
+- Admin field import endpoint:
+  - `POST /api/admin/import-field/:tournamentId` with `x-admin-token`
+  - Body supports either:
+    - JSON: `{"players":[{"name":"Scottie Scheffler","country":"USA","world_rank":1}]}`
+    - CSV text: `{"csv":"name,country,world_rank\nScottie Scheffler,USA,1"}`
 
 - Tournament source behavior:
   - Default provider is TheSportsDB (plus template fallback).
