@@ -542,7 +542,7 @@ function ShotClock({total,time}) {
 
 /* ─── MAIN APP ─── */
 export default function GolfPoolPro() {
-  const [view,setView] = useState("home");
+  const [view,setView] = useState(()=> LS.get("mgpp_session", null) ? "home" : "invite");
   const [adminTab,setAdminTab] = useState("config");
   const [analyticsTab,setAnalyticsTab] = useState("leaderboard");
   const [statsTab,setStatsTab] = useState("overview");
@@ -656,6 +656,18 @@ export default function GolfPoolPro() {
     },1000);
     return ()=>clearInterval(tick);
   },[]);
+
+  // Require login for all non-invite screens.
+  useEffect(()=>{
+    if(!currentUser && view!=="invite"){
+      setActivePool(null);
+      setView("invite");
+      setInvitePool(null);
+      setInviteView(true);
+      setAuthMode("login");
+      setAuthError("");
+    }
+  },[currentUser, view]);
 
   // Active pool config
   const poolConfig = activePool || config;
@@ -892,7 +904,8 @@ export default function GolfPoolPro() {
     setAuthName("");
     setAuthError("");
     setAuthSuccess("");
-    setView("home");
+    setView("invite");
+    setInviteView(true);
     clearHash();
     try {
       localStorage.removeItem("mgpp_session");
@@ -2330,9 +2343,11 @@ export default function GolfPoolPro() {
                     <button className="btn-link" style={{fontSize:13}} onClick={()=>{setAuthMode("forgot");setAuthError("");setForgotSent(false);}}>
                       Forgot your password?
                     </button>
-                    <button className="btn-link" style={{fontSize:13}} onClick={()=>{setView("home");setActivePool(null);}}>
-                      Back to Home
-                    </button>
+                    {currentUser && (
+                      <button className="btn-link" style={{fontSize:13}} onClick={()=>{setView("home");setActivePool(null);}}>
+                        Back to Home
+                      </button>
+                    )}
                   </div>
                   <div style={{marginTop:20,padding:"12px 16px",background:"var(--cream-2)",borderRadius:9}}>
                     <p style={{fontSize:11,fontWeight:700,color:"var(--forest)",marginBottom:4}}>Demo credentials:</p>
@@ -2362,9 +2377,11 @@ export default function GolfPoolPro() {
                   <p style={{fontSize:11,color:"var(--muted)",textAlign:"center",lineHeight:1.5}}>
                     By creating an account you agree to our Terms of Service and Privacy Policy.
                   </p>
-                  <div style={{marginTop:14,textAlign:"center"}}>
-                    <button className="btn-link" onClick={()=>{setView("home");setActivePool(null);}}>Back to Home</button>
-                  </div>
+                  {currentUser && (
+                    <div style={{marginTop:14,textAlign:"center"}}>
+                      <button className="btn-link" onClick={()=>{setView("home");setActivePool(null);}}>Back to Home</button>
+                    </div>
+                  )}
                 </div>
               )}
 
