@@ -1,5 +1,5 @@
 // server/services/scoresSync.js
-// Syncs live tournament scores from TheSportsDB (primary) or SportsDataIO (fallback)
+// Syncs live tournament scores from TheSportsDB (primary)
 // Called every 30 seconds by the cron job in server/index.js
 
 const fetch = require("node-fetch");  // npm install node-fetch@2
@@ -11,6 +11,7 @@ const SPORTS_DATA_BASE = "https://api.sportsdata.io/golf/v2/json";
 const THE_SPORTS_DB_KEY = process.env.THE_SPORTS_DB_KEY || "3";
 const THE_SPORTS_DB = `https://www.thesportsdb.com/api/v1/json/${THE_SPORTS_DB_KEY}`;
 const SCORE_PROVIDER = (process.env.SCORE_PROVIDER || "THESPORTSDB").toUpperCase();
+const USE_SPORTSDATAIO = String(process.env.USE_SPORTSDATAIO || "").toLowerCase() === "true";
 const AUTO_EVENT_MAP = {};
 
 function parseMap(raw) {
@@ -79,13 +80,14 @@ async function syncLiveScores(supabase) {
 }
 
 async function fetchScores(internalTournamentId, supabase) {
-  if (SCORE_PROVIDER === "SPORTSDATAIO") {
+  if (USE_SPORTSDATAIO && SCORE_PROVIDER === "SPORTSDATAIO") {
     const sportsData = await fetchSportsDataScores(internalTournamentId);
     if (sportsData?.length) return sportsData;
     return fetchTheSportsDbScores(internalTournamentId, supabase);
   }
   const theSportsDb = await fetchTheSportsDbScores(internalTournamentId, supabase);
   if (theSportsDb?.length) return theSportsDb;
+  if (!USE_SPORTSDATAIO) return null;
   return fetchSportsDataScores(internalTournamentId);
 }
 
@@ -180,7 +182,8 @@ async function resolveTheSportsDbEventId(internalTournamentId, supabase) {
 }
 
 async function fetchTheSportsDbScores(internalTournamentId, supabase) {
-  const eventId = await resolveTheSportsDbEventId(internalTournamentId, supabase);
+  const explicit = String(internalTournamentId || "").match(/^tsdb_(\d+)$/i);
+  const eventId = explicit ? explicit[1] : await resolveTheSportsDbEventId(internalTournamentId, supabase);
   if (!eventId) {
     console.warn(`No TheSportsDB event ID resolved for tournament ${internalTournamentId}`);
     return null;
@@ -221,7 +224,8 @@ async function fetchTheSportsDbScores(internalTournamentId, supabase) {
 async function fetchSportsDataScores(internalTournamentId) {
   if (!SPORTS_DATA_KEY) return null;
 
-  const externalId = SPORTS_DATA_TOURNAMENT_MAP[internalTournamentId];
+  const explicit = String(internalTournamentId || "").match(/^sdio_(\d+)$/i);
+  const externalId = explicit ? Number(explicit[1]) : SPORTS_DATA_TOURNAMENT_MAP[internalTournamentId];
   if (!externalId) return null;
 
   const url = `${SPORTS_DATA_BASE}/Leaderboard/${externalId}?key=${SPORTS_DATA_KEY}`;
@@ -297,10 +301,12 @@ async function seedGolfers(supabase) {
 
   let rows = null;
   try {
-    rows = SCORE_PROVIDER === "SPORTSDATAIO" ? await fromSportsData() : await fromTheSportsDb();
-    if (!rows?.length) rows = await fromSportsData();
+    rows = SCORE_PROVIDER === "SPORTSDATAIO" && USE_SPORTSDATAIO
+      ? await fromSportsData()
+      : await fromTheSportsDb();
+    if (!rows?.length && USE_SPORTSDATAIO) rows = await fromSportsData();
   } catch {
-    rows = await fromSportsData();
+    rows = USE_SPORTSDATAIO ? await fromSportsData() : null;
   }
 
   if (!rows?.length) return { error: "No golfers returned from provider(s)" };

@@ -24,7 +24,7 @@ npm --prefix server install
 cp server/.env.example server/.env
 ```
 
-Then fill in real Supabase/SportsDataIO keys in `server/.env`.
+Then fill in real Supabase keys in `server/.env`.
 
 Optional (recommended): add GolfCourseAPI integration in `server/.env`:
 
@@ -67,3 +67,10 @@ VITE_SITE_URL=https://golfpoolpro.vercel.app
   - `GET /api/courses/search?q=augusta`
   - `GET /api/courses/:id`
   - `GET /api/courses/tournament/:id`
+
+- Tournament source behavior:
+  - Default provider is TheSportsDB (plus template fallback).
+  - SportsDataIO is disabled by default and only used if `USE_SPORTSDATAIO=true`.
+  - If enabled, backend compares upcoming tournaments from SportsDataIO vs TheSportsDB.
+  - It seeds from whichever provider returns more upcoming events.
+  - If future tournament rows are low, `/api/tournaments/future` auto-backfills.
