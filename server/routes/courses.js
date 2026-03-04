@@ -198,6 +198,37 @@ async function searchCourses(query) {
   return [];
 }
 
+async function searchCoursesDebug(query) {
+  const q = encodeURIComponent(query);
+  const urls = [
+    `${GOLF_COURSE_API_BASE}/search?name=${q}`,
+    `${GOLF_COURSE_API_BASE}/v1/courses?search=${q}`,
+    `${GOLF_COURSE_API_BASE}/v1/courses?q=${q}`,
+    `${GOLF_COURSE_API_BASE}/v1/courses?name=${q}`,
+    `${GOLF_COURSE_API_BASE}/courses?search=${q}`,
+    `${GOLF_COURSE_API_BASE}/courses?q=${q}`,
+  ];
+  const out = [];
+  for (const url of urls) {
+    try {
+      const resp = await fetch(url, { headers: authHeaders(), timeout: 10000 });
+      const text = await resp.text();
+      let json = null;
+      try { json = JSON.parse(text); } catch {}
+      out.push({
+        url,
+        ok: resp.ok,
+        status: resp.status,
+        topLevelKeys: json && typeof json === "object" ? Object.keys(json).slice(0, 20) : [],
+        preview: json || text.slice(0, 300),
+      });
+    } catch (e) {
+      out.push({ url, ok: false, status: 0, error: e.message });
+    }
+  }
+  return out;
+}
+
 async function getCourseById(id) {
   const encoded = encodeURIComponent(id);
   const urls = [
@@ -231,6 +262,24 @@ router.get("/search", async (req, res, next) => {
       res.setHeader("Retry-After", String(e.retryAfterSeconds || 60));
       return res.status(429).json({ error: e.message, retryAfterSeconds: e.retryAfterSeconds || 60 });
     }
+    return next(e);
+  }
+});
+
+router.get("/debug/search", async (req, res, next) => {
+  try {
+    const required = process.env.ADMIN_TOKEN;
+    if (required && req.headers["x-admin-token"] !== required) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    const q = String(req.query.q || "").trim();
+    if (!q) return res.status(400).json({ error: "Missing query string `q`." });
+    if (!hasProviderCreds()) {
+      return res.status(400).json({ error: "Set RAPIDAPI_KEY (+ RAPIDAPI_HOST) or GOLFCOURSE_API_KEY." });
+    }
+    const attempts = await searchCoursesDebug(q);
+    return res.json({ provider: COURSE_PROVIDER, attempts });
+  } catch (e) {
     return next(e);
   }
 });
