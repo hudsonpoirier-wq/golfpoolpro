@@ -688,6 +688,24 @@ export default function GolfPoolPro() {
     loadTournaments();
   },[]);
 
+  // Backfill legacy pools that were created without a tournament selection.
+  useEffect(() => {
+    if (!tournaments.length) return;
+    if (!activePool) return;
+    if (activePool.tournamentId || activePool.tournament) return;
+
+    const fallbackTournamentId = tournaments[0]?.id;
+    if (!fallbackTournamentId) return;
+
+    setActivePool((p) => (p ? { ...p, tournamentId: fallbackTournamentId } : p));
+    setPools((prev) =>
+      prev.map((p) =>
+        p.id === activePool.id ? { ...p, tournamentId: fallbackTournamentId } : p
+      )
+    );
+    notify(`Assigned ${tournaments[0]?.name || "a tournament"} to this legacy pool.`, "success");
+  }, [tournaments, activePool]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const selectedTournamentId = activePool?.tournamentId || config.tournamentId || config.tournament || "";
 
   useEffect(()=>{
