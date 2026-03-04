@@ -1093,6 +1093,7 @@ export default function GolfPoolPro() {
     g.name.toLowerCase().includes(search.toLowerCase())
   );
 
+  const effectiveUserId = apiSession.get()?.id || currentUser;
   const activePoolMemberIds = activePool ? (poolMembers[activePool.id] || []) : [];
   const isHostOfActivePool = String(activePool?.hostId || activePool?.host_id || "") === String(effectiveUserId || "");
   const joinedParticipants = (() => {
@@ -1134,7 +1135,6 @@ export default function GolfPoolPro() {
   const totalPicks = joinedParticipants.length * (activePool?.teamSize||config.teamSize);
   const currentParticipantIdx = draftActive&&!draftDone ? snakeOrder[currentPick] : null;
   const currentParticipant = currentParticipantIdx!==null ? baseParticipantOrder[currentParticipantIdx] : null;
-  const effectiveUserId = apiSession.get()?.id || currentUser;
 
   useEffect(()=>{
     if(!draftActive||draftDone) return;
