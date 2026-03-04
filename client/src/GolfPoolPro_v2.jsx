@@ -502,6 +502,8 @@ const fmtTDate = (isoDate) => {
   return d.toLocaleDateString(undefined, {month:"short", day:"numeric", year:"numeric"});
 };
 
+const makeInviteToken = () => Math.random().toString(36).slice(2, 10);
+
 const parseInviteTokenFromLocation = () => {
   if (typeof window === "undefined") return null;
   const hash = window.location.hash || "";
@@ -613,6 +615,7 @@ export default function GolfPoolPro() {
     poolName:"Sunday Showdown",tournament:"",maxParticipants:8,
     teamSize:4,scoringGolfers:2,cutLine:2,shotClock:60,draftOrderType:"ordered",
   });
+  const [pendingInviteToken, setPendingInviteToken] = useState(() => makeInviteToken());
   const [randomizedOrder,setRandomizedOrder] = useState([]);
 
   const [participants,setParticipants] = useState(()=> LS.get("mgpp_participants", []));
@@ -1010,6 +1013,7 @@ export default function GolfPoolPro() {
     if (!token) return `${SITE_BASE}/`;
     return `${SITE_BASE}/#/join/${encodeURIComponent(token)}`;
   };
+  const createFlowInviteUrl = buildInviteUrl({ invite_token: pendingInviteToken });
 
   const openPool = (pool) => {
     setActivePool(pool);
@@ -2466,7 +2470,7 @@ export default function GolfPoolPro() {
                       cutLine:config.cutLine,
                       shotClock:config.shotClock,
                       draftOrderType:config.draftOrderType,
-                      invite_token: Math.random().toString(36).slice(2, 10),
+                      invite_token: pendingInviteToken,
                       yourRank:null,yourScore:null,
                       hostId: currentUser||1,
                       created: new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"})
@@ -2477,6 +2481,8 @@ export default function GolfPoolPro() {
                     setPoolReadyMap({});
                     setConfirmDelete(false);
                     setView("pool");
+                    // Next pool creation gets a fresh token.
+                    setPendingInviteToken(makeInviteToken());
                     notify("Pool created! Share the invite link to get people in.");
                   }}>
                     💾 Save & Create Pool
@@ -2519,15 +2525,15 @@ export default function GolfPoolPro() {
                     </div>
                   </div>
                   <div className="link-box" style={{marginBottom:16}}>
-                    <span className="link-txt">{activePool ? buildInviteUrl(activePool) : `${SITE_BASE}/#/join/your-invite-token`}</span>
+                    <span className="link-txt">{activePool ? buildInviteUrl(activePool) : createFlowInviteUrl}</span>
                     <div style={{display:"flex",gap:6,flexShrink:0}}>
-                      <button className="btn btn-ghost btn-sm" onClick={()=>copyLink(activePool ? buildInviteUrl(activePool) : `${SITE_BASE}/#/join/your-invite-token`)}>📋 Copy</button>
+                      <button className="btn btn-ghost btn-sm" onClick={()=>copyLink(activePool ? buildInviteUrl(activePool) : createFlowInviteUrl)}>📋 Copy</button>
                       <button className="btn btn-prim btn-sm" onClick={()=>openInvite(activePool || null)}>👁️ Preview</button>
                     </div>
                   </div>
                   <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
                     {["📧 Email invite","💬 Copy for text","🐦 Share link"].map(l=>(
-                      <button key={l} className="btn btn-ghost btn-sm" onClick={()=>copyLink(activePool ? buildInviteUrl(activePool) : `${SITE_BASE}/#/join/your-invite-token`)}>
+                      <button key={l} className="btn btn-ghost btn-sm" onClick={()=>copyLink(activePool ? buildInviteUrl(activePool) : createFlowInviteUrl)}>
                         {l}
                       </button>
                     ))}
