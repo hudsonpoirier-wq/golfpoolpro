@@ -11,6 +11,7 @@ const SPORTS_DATA_BASE = "https://api.sportsdata.io/golf/v2/json";
 const THE_SPORTS_DB_KEY = process.env.THE_SPORTS_DB_KEY || "3";
 const THE_SPORTS_DB = `https://www.thesportsdb.com/api/v1/json/${THE_SPORTS_DB_KEY}`;
 const SCORE_PROVIDER = (process.env.SCORE_PROVIDER || "THESPORTSDB").toUpperCase();
+const AUTO_EVENT_MAP = {};
 
 function parseMap(raw) {
   if (!raw) return {};
@@ -47,7 +48,7 @@ async function syncLiveScores(supabase) {
 
   for (const tournament of activeTournaments) {
     try {
-      const scores = await fetchScores(tournament.id);
+      const scores = await fetchScores(tournament.id, supabase);
       if (!scores?.length) continue;
 
       // Upsert scores in bulk
@@ -77,13 +78,13 @@ async function syncLiveScores(supabase) {
   }
 }
 
-async function fetchScores(internalTournamentId) {
+async function fetchScores(internalTournamentId, supabase) {
   if (SCORE_PROVIDER === "SPORTSDATAIO") {
     const sportsData = await fetchSportsDataScores(internalTournamentId);
     if (sportsData?.length) return sportsData;
-    return fetchTheSportsDbScores(internalTournamentId);
+    return fetchTheSportsDbScores(internalTournamentId, supabase);
   }
-  const theSportsDb = await fetchTheSportsDbScores(internalTournamentId);
+  const theSportsDb = await fetchTheSportsDbScores(internalTournamentId, supabase);
   if (theSportsDb?.length) return theSportsDb;
   return fetchSportsDataScores(internalTournamentId);
 }
@@ -118,10 +119,70 @@ function normalizeScoreRow(raw) {
   };
 }
 
-async function fetchTheSportsDbScores(internalTournamentId) {
-  const eventId = THE_SPORTS_DB_EVENT_MAP[internalTournamentId];
+function normalizeName(v) {
+  return String(v || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function dateDistanceDays(a, b) {
+  if (!a || !b) return 3650;
+  const da = new Date(a);
+  const db = new Date(b);
+  if (Number.isNaN(da.getTime()) || Number.isNaN(db.getTime())) return 3650;
+  return Math.abs(Math.round((da.getTime() - db.getTime()) / 86400000));
+}
+
+async function resolveTheSportsDbEventId(internalTournamentId, supabase) {
+  if (THE_SPORTS_DB_EVENT_MAP[internalTournamentId]) return THE_SPORTS_DB_EVENT_MAP[internalTournamentId];
+  if (AUTO_EVENT_MAP[internalTournamentId]) return AUTO_EVENT_MAP[internalTournamentId];
+
+  if (!supabase) return null;
+  const { data: tournament } = await supabase
+    .from("tournaments")
+    .select("id, name, start_date")
+    .eq("id", internalTournamentId)
+    .single();
+  if (!tournament?.name) return null;
+
+  const query = encodeURIComponent(tournament.name);
+  const url = `${THE_SPORTS_DB}/searchevents.php?e=${query}`;
+  try {
+    const resp = await fetch(url, { timeout: 8000 });
+    if (!resp.ok) return null;
+    const json = await resp.json();
+    const events = json?.event || [];
+    if (!Array.isArray(events) || !events.length) return null;
+
+    const targetName = normalizeName(tournament.name);
+    let best = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    for (const ev of events) {
+      const eventName = normalizeName(ev.strEvent);
+      const includes = eventName.includes(targetName) || targetName.includes(eventName) ? 0 : 25;
+      const datePenalty = dateDistanceDays(tournament.start_date, ev.dateEvent);
+      const score = includes + datePenalty;
+      if (score < bestScore) {
+        bestScore = score;
+        best = ev;
+      }
+    }
+
+    const resolved = best?.idEvent ? String(best.idEvent) : null;
+    if (resolved) AUTO_EVENT_MAP[internalTournamentId] = resolved;
+    return resolved;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchTheSportsDbScores(internalTournamentId, supabase) {
+  const eventId = await resolveTheSportsDbEventId(internalTournamentId, supabase);
   if (!eventId) {
-    console.warn(`THE_SPORTS_DB_EVENT_MAP missing tournament ${internalTournamentId}`);
+    console.warn(`No TheSportsDB event ID resolved for tournament ${internalTournamentId}`);
     return null;
   }
 
@@ -251,4 +312,4 @@ async function seedGolfers(supabase) {
   return error ? { error: error.message } : { seeded: rows.length };
 }
 
-module.exports = { syncLiveScores, seedGolfers };
+module.exports = { syncLiveScores, seedGolfers, resolveTheSportsDbEventId };

@@ -24,7 +24,8 @@ const scoreRoutes   = require("./routes/scores");
 const inviteRoutes  = require("./routes/invites");
 const draftRoutes   = require("./routes/draft");
 const tournamentRoutes = require("./routes/tournaments");
-const { syncLiveScores, seedGolfers } = require("./services/scoresSync");
+const { syncLiveScores, seedGolfers, resolveTheSportsDbEventId } = require("./services/scoresSync");
+const { seedUpcomingTournaments } = require("./services/tournamentSync");
 
 const app = express();
 
@@ -79,6 +80,48 @@ app.post("/api/admin/seed-golfers", async (req, res, next) => {
     const result = await seedGolfers(supabase);
     if (result?.error) return res.status(400).json({ error: result.error });
     return res.json(result);
+  } catch (e) {
+    return next(e);
+  }
+});
+
+app.post("/api/admin/seed-tournaments", async (req, res, next) => {
+  try {
+    const required = process.env.ADMIN_TOKEN;
+    if (required && req.headers["x-admin-token"] !== required) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    const year = Number(req.body?.year) || new Date().getUTCFullYear();
+    const result = await seedUpcomingTournaments(supabase, year);
+    if (result?.error) return res.status(400).json({ error: result.error });
+    return res.json(result);
+  } catch (e) {
+    return next(e);
+  }
+});
+
+app.get("/api/admin/tournaments/suggest-map", async (req, res, next) => {
+  try {
+    const required = process.env.ADMIN_TOKEN;
+    if (required && req.headers["x-admin-token"] !== required) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const { data: tournaments, error } = await supabase
+      .from("tournaments")
+      .select("id, name, start_date")
+      .gte("start_date", today)
+      .order("start_date", { ascending: true });
+    if (error) return res.status(500).json({ error: error.message });
+
+    const map = {};
+    for (const tournament of tournaments || []) {
+      const eventId = await resolveTheSportsDbEventId(tournament.id, supabase);
+      if (eventId) map[tournament.id] = String(eventId);
+    }
+
+    return res.json({ count: Object.keys(map).length, map });
   } catch (e) {
     return next(e);
   }
