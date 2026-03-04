@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Golfers, Courses, Invites } from "./api";
+import { Golfers, Courses, Invites, Auth, Pools, Draft, session as apiSession, token as apiToken } from "./api";
 import {
   AreaChart, Area, LineChart, Line, BarChart, Bar,
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
@@ -142,7 +142,7 @@ select.inp{cursor:pointer}
 
 /* LINK BOX */
 .link-box{background:var(--cream);border:1.5px solid var(--parchment);border-radius:9px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px}
-.link-txt{font-size:12px;color:var(--forest-mid);font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.link-txt{font-size:12px;color:var(--forest-mid);font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px;display:block}
 
 /* PARTICIPANT PORTAL / INVITE */
 .portal-wrap{min-height:100vh;background:linear-gradient(160deg,#0D2B1D,var(--forest) 60%,#1A3D2B);display:flex;align-items:center;justify-content:center;padding:40px 20px}
@@ -913,6 +913,113 @@ export default function GolfPoolPro() {
     return () => { cancelled = true; };
   }, [selectedTournamentId]);
 
+  useEffect(() => {
+    const su = apiSession.get();
+    if (!currentUser && su?.id) {
+      setCurrentUser(su.id);
+      LS.set("mgpp_session", su.id);
+    }
+  }, [currentUser]);
+
+  // Pull pools from backend for authenticated sessions (shared across users/devices).
+  useEffect(() => {
+    if (!apiToken.get()) return;
+    let cancelled = false;
+    const pullPools = async () => {
+      try {
+        const resp = await Pools.list();
+        if (cancelled) return;
+        const mapped = (resp?.pools || []).map((p) => ({
+          id: p.id,
+          name: p.name,
+          status: p.status || "lobby",
+          tournamentId: p.tournament?.id || p.tournament_id || "",
+          tournamentName: p.tournament?.name || "",
+          participants: Number(p.participants || 0),
+          maxParticipants: Number(p.max_participants || p.maxParticipants || 8),
+          teamSize: Number(p.team_size || p.teamSize || 4),
+          scoringGolfers: Number(p.scoring_golfers || p.scoringGolfers || 2),
+          cutLine: Number(p.cut_line || p.cutLine || 2),
+          shotClock: Number(p.shot_clock || p.shotClock || 60),
+          draftOrderType: p.draft_order_type || p.draftOrderType || "ordered",
+          invite_token: p.invite_token || null,
+          hostId: p.host_id || null,
+          yourRank: p.yourRank ?? null,
+          yourScore: p.yourScore ?? null,
+          created: p.created_at ? new Date(p.created_at).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"}),
+        }));
+        setPools(mapped);
+      } catch {}
+    };
+    pullPools();
+    return () => { cancelled = true; };
+  }, [currentUser]);
+
+  // Sync active pool members + picks from backend so lobby and draft stay shared.
+  useEffect(() => {
+    if (!apiToken.get() || !activePool?.id || view !== "pool") return;
+    let cancelled = false;
+    const syncPool = async () => {
+      try {
+        const resp = await Pools.get(activePool.id);
+        if (cancelled) return;
+        const members = resp?.members || [];
+        const picks = resp?.picks || [];
+
+        const mappedPeople = members.map((m) => ({
+          id: m.user_id,
+          name: m.profile?.name || "Player",
+          avatar: m.profile?.avatar || ((m.profile?.name || "PL").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()),
+          email: m.profile?.email || "",
+          joined: true,
+        }));
+        setParticipants((prev) => {
+          const byId = new Map(prev.map((p) => [p.id, p]));
+          mappedPeople.forEach((p) => byId.set(p.id, { ...(byId.get(p.id) || {}), ...p, joined: true }));
+          return [...byId.values()];
+        });
+        setPoolMembers((prev) => ({ ...prev, [activePool.id]: mappedPeople.map((p) => p.id) }));
+        setPoolReadyMap((prev) => ({
+          ...prev,
+          ...Object.fromEntries(members.map((m) => [m.user_id, !!m.is_ready])),
+        }));
+        setAllDrafted((prev) => ({
+          ...prev,
+          [activePool.id]: picks.map((p) => ({
+            golferId: p.golfer_id,
+            participantId: p.user_id,
+            pickNum: p.pick_number,
+          })),
+        }));
+        setDrafted(picks.map((p) => ({
+          golferId: p.golfer_id,
+          participantId: p.user_id,
+          pickNum: p.pick_number,
+        })));
+        setCurrentPick(picks.length);
+        setActivePool((pool) => pool ? ({
+          ...pool,
+          status: resp?.pool?.status || pool.status,
+          participants: mappedPeople.length,
+          maxParticipants: Number(resp?.pool?.max_participants || pool.maxParticipants || 8),
+          teamSize: Number(resp?.pool?.team_size || pool.teamSize || 4),
+          scoringGolfers: Number(resp?.pool?.scoring_golfers || pool.scoringGolfers || 2),
+          cutLine: Number(resp?.pool?.cut_line || pool.cutLine || 2),
+          shotClock: Number(resp?.pool?.shot_clock || pool.shotClock || 60),
+          tournamentId: resp?.pool?.tournament_id || pool.tournamentId,
+          invite_token: resp?.pool?.invite_token || pool.invite_token,
+        }) : pool);
+        const nextStatus = resp?.pool?.status || activePool.status;
+        if (nextStatus === "draft") setPoolPhase("draft");
+        else if (nextStatus === "live" || nextStatus === "complete") setPoolPhase("live");
+        else setPoolPhase("lobby");
+      } catch {}
+    };
+    syncPool();
+    const t = setInterval(syncPool, 4000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [activePool?.id, view, currentUser]);
+
   // Require login for all non-invite screens.
   useEffect(()=>{
     if(!currentUser && view!=="invite"){
@@ -923,7 +1030,7 @@ export default function GolfPoolPro() {
       setAuthMode("login");
       setAuthError("");
     }
-    if(currentUser && !accounts.find(a=>a.id===currentUser)){
+    if(typeof currentUser === "number" && currentUser && !accounts.find(a=>a.id===currentUser)){
       setCurrentUser(null);
       setView("invite");
       setAuthMode("login");
@@ -954,7 +1061,10 @@ export default function GolfPoolPro() {
     g.name.toLowerCase().includes(search.toLowerCase())
   );
 
-  const joinedParticipants = participants.filter(p=>p.joined);
+  const activePoolMemberIds = activePool ? (poolMembers[activePool.id] || []) : [];
+  const joinedParticipants = activePool
+    ? participants.filter(p=>activePoolMemberIds.includes(p.id))
+    : participants.filter(p=>p.joined);
 
   // Get picks for active pool (or current draft)
   const activePicks = activePool ? (allDrafted[activePool.id]||[]) : drafted;
@@ -985,6 +1095,7 @@ export default function GolfPoolPro() {
   const totalPicks = joinedParticipants.length * (activePool?.teamSize||config.teamSize);
   const currentParticipantIdx = draftActive&&!draftDone ? snakeOrder[currentPick] : null;
   const currentParticipant = currentParticipantIdx!==null ? baseParticipantOrder[currentParticipantIdx] : null;
+  const effectiveUserId = apiSession.get()?.id || currentUser;
 
   useEffect(()=>{
     if(!draftActive||draftDone) return;
@@ -1004,10 +1115,40 @@ export default function GolfPoolPro() {
     if(avail.length) makePick(avail[0].id,true);
   },[drafted,currentPick,poolTournamentField]);
 
-  const makePick = (golferId,auto=false) => {
+  const makePick = async (golferId,auto=false) => {
     if(!draftActive||draftDone) return;
+    if (!auto && effectiveUserId && currentParticipant?.id && currentParticipant.id !== effectiveUserId) {
+      notify("It's not your turn to pick.", "error");
+      return;
+    }
+
+    if (activePool?.id && apiToken.get()) {
+      try {
+        await Draft.pick(activePool.id, golferId);
+        const state = await Draft.state(activePool.id);
+        const picks = state?.picks || [];
+        const mapped = picks.map((p)=>({
+          golferId: p.golfer_id,
+          participantId: p.user_id,
+          pickNum: p.pick_number,
+        }));
+        setDrafted(mapped);
+        setAllDrafted(ad=>({...ad,[activePool.id]:mapped}));
+        setCurrentPick(picks.length);
+        if (state?.isDone || picks.length >= totalPicks) {
+          setDraftDone(true);
+          setDraftActive(false);
+        }
+        return;
+      } catch (e) {
+        notify(e?.message || "Pick failed. Refresh and try again.", "error");
+        return;
+      }
+    }
+
     clearInterval(timerRef.current);
-    const pId = joinedParticipants[snakeOrder[currentPick]].id;
+    const pId = baseParticipantOrder[snakeOrder[currentPick]]?.id;
+    if (!pId) return;
     const newPick = {golferId,participantId:pId,pickNum:currentPick,auto};
     setDrafted(d=>[...d,newPick]);
     if(activePool){
@@ -1078,6 +1219,25 @@ export default function GolfPoolPro() {
     notify("Link copied to clipboard!");
   };
 
+  const getEffectiveUserId = () => apiSession.get()?.id || currentUser;
+  const getEffectiveUserName = () => {
+    const su = apiSession.get();
+    if (su?.name) return su.name;
+    const acct = accounts.find(a=>a.id===currentUser);
+    return acct?.name || "Account";
+  };
+  const getEffectiveUserAvatar = () => {
+    const su = apiSession.get();
+    if (su?.avatar) return su.avatar;
+    const acct = accounts.find(a=>a.id===currentUser);
+    return acct?.avatar || (getEffectiveUserName().split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase() || "AD");
+  };
+  const getEffectiveUserEmail = () => {
+    const su = apiSession.get();
+    if (su?.email) return su.email;
+    return accounts.find(a=>a.id===currentUser)?.email || "";
+  };
+
   const buildInviteUrl = (pool) => {
     const token = pool?.invite_token || pool?.inviteToken || pool?.id;
     if (!token) return `${SITE_BASE}/`;
@@ -1085,11 +1245,17 @@ export default function GolfPoolPro() {
     const suffix = encoded ? `?d=${encodeURIComponent(encoded)}` : "";
     return `${SITE_BASE}/#/join/${encodeURIComponent(token)}${suffix}`;
   };
+  const compactInviteUrl = (pool) => {
+    const token = pool?.invite_token || pool?.inviteToken || pool?.id || "";
+    const short = token.length > 14 ? `${token.slice(0,7)}…${token.slice(-5)}` : token;
+    return `${SITE_BASE}/#/join/${short}`;
+  };
   const createFlowInviteUrl = buildInviteUrl({ invite_token: pendingInviteToken });
 
   const openPool = (pool) => {
     setActivePool(pool);
     if(pool.status==="live") setPoolPhase("live");
+    else if(pool.status==="draft") setPoolPhase("draft");
     else if(pool.status==="complete") setPoolPhase("live");
     else setPoolPhase("lobby");
     setPoolReadyMap({});
@@ -1099,7 +1265,7 @@ export default function GolfPoolPro() {
   const openInvite = (pool) => {
     setInvitePool(pool);
     setInviteView(true);
-    setAuthMode(currentUser ? "join" : "login");
+    setAuthMode((apiSession.get()?.id || currentUser) ? "join" : "login");
     setAuthEmail(""); setAuthPass(""); setAuthName(""); setAuthError(""); setAuthSuccess("");
     setForgotSent(false);
     setView("invite");
@@ -1155,8 +1321,33 @@ export default function GolfPoolPro() {
     });
   };
 
-  const handleLogin = () => {
-    const acct = accounts.find(a=>a.email.toLowerCase()===authEmail.toLowerCase()&&a.password===authPass);
+  const handleLogin = async () => {
+    const email = authEmail.trim().toLowerCase();
+    const pass = authPass;
+    if (!email || !pass) { setAuthError("Email and password are required."); return; }
+
+    try {
+      const resp = await Auth.login({ email, password: pass });
+      const user = resp?.user;
+      if (!user?.id) throw new Error("Invalid login response");
+      setCurrentUser(user.id);
+      LS.set("mgpp_session", user.id);
+      ensureParticipant({ id:user.id, name:user.name || email.split("@")[0], email:user.email || email, avatar:user.avatar || (user.name||"U").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase() });
+      setAuthError("");
+      if(invitePool){
+        setAuthSuccess(`Logged in as ${user.name || email}. Review the pool details, then tap Join Pool.`);
+        setAuthMode("join");
+        setInviteView(true);
+        setView("invite");
+      } else {
+        notify(`Welcome back, ${(user.name || email).split(" ")[0]}!`);
+        setView("home");
+      }
+      return;
+    } catch {}
+
+    // Local fallback
+    const acct = accounts.find(a=>a.email.toLowerCase()===email&&a.password===pass);
     if(!acct){ setAuthError("Invalid email or password."); return; }
     ensureParticipant(acct);
     setCurrentUser(acct.id);
@@ -1174,14 +1365,39 @@ export default function GolfPoolPro() {
     }
   };
 
-  const handleSignup = () => {
+  const handleSignup = async () => {
     if(!authName.trim()||!authEmail.trim()||!authPass){ setAuthError("Please fill all fields."); return; }
     if(authPass.length<6){ setAuthError("Password must be at least 6 characters."); return; }
-    const existing = accounts.find(a=>a.email.toLowerCase()===authEmail.toLowerCase());
+    const name = authName.trim();
+    const email = authEmail.trim().toLowerCase();
+    const pass = authPass;
+
+    try {
+      const resp = await Auth.signup({ name, email, password: pass });
+      const user = resp?.user;
+      if (!user?.id) throw new Error("Invalid signup response");
+      setCurrentUser(user.id);
+      LS.set("mgpp_session", user.id);
+      ensureParticipant({ id:user.id, name:user.name || name, email:user.email || email, avatar:user.avatar || name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase() });
+      setAuthError("");
+      if(invitePool){
+        setAuthSuccess(`Account created. Review the pool details, then tap Join Pool.`);
+        setAuthMode("join");
+        setInviteView(true);
+        setView("invite");
+      } else {
+        notify(`Welcome to MyGolfPoolPro, ${name.split(" ")[0]}!`);
+        setView("home");
+      }
+      return;
+    } catch {}
+
+    // Local fallback
+    const existing = accounts.find(a=>a.email.toLowerCase()===email);
     if(existing){ setAuthError("An account with this email already exists. Please log in."); return; }
     const newId = Math.max(...accounts.map(a=>a.id),5)+1;
-    const avatar = authName.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
-    const newAcct = {id:newId, name:authName.trim(), email:authEmail.trim().toLowerCase(), password:authPass, avatar};
+    const avatar = name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
+    const newAcct = {id:newId, name, email, password:pass, avatar};
     const updated = [...accounts, newAcct];
     setAccounts(updated);
     ensureParticipant(newAcct);
@@ -1192,11 +1408,11 @@ export default function GolfPoolPro() {
       setAuthError("");
       setAuthSuccess(`Account created. Review the pool details, then tap Join Pool.`);
       setAuthMode("join");
-      notify(`Welcome to MyGolfPoolPro, ${authName.split(" ")[0]}!`);
+      notify(`Welcome to MyGolfPoolPro, ${name.split(" ")[0]}!`);
       setInviteView(true);
       setView("invite");
     } else {
-      notify(`Welcome to MyGolfPoolPro, ${authName.split(" ")[0]}!`);
+      notify(`Welcome to MyGolfPoolPro, ${name.split(" ")[0]}!`);
       setView("home");
     }
   };
@@ -1210,7 +1426,8 @@ export default function GolfPoolPro() {
     notify("Password reset email sent!");
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try { await Auth.logout(); } catch {}
     setCurrentUser(null);
     setShowSettings(false);
     setActivePool(null);
@@ -1234,14 +1451,48 @@ export default function GolfPoolPro() {
   };
 
   const handleJoinInvitedPool = async () => {
-    if (!currentUser || !invitePool) return;
+    const userId = getEffectiveUserId();
+    if (!userId || !invitePool) return;
     try {
       // Try backend join when we have a real invite token/session; local-mode fallback below.
       const token = invitePool.invite_token || invitePool.inviteToken || null;
+      let joinedPoolId = invitePool.id;
       if (token) {
-        try { await Invites.join(token); } catch {}
+        try {
+          const joined = await Invites.join(token);
+          joinedPoolId = joined?.poolId || joinedPoolId;
+        } catch {}
       }
-      joinPool(currentUser, invitePool);
+      if (apiToken.get() && joinedPoolId) {
+        try {
+          const details = await Pools.get(joinedPoolId);
+          const bp = details?.pool || {};
+          const mappedPool = {
+            id: bp.id || invitePool.id,
+            name: bp.name || invitePool.name,
+            status: bp.status || invitePool.status || "lobby",
+            tournamentId: bp.tournament_id || invitePool.tournamentId || "",
+            tournamentName: bp.tournament?.name || invitePool.tournamentName || "",
+            participants: (details?.members || []).length || invitePool.participants || 0,
+            maxParticipants: Number(bp.max_participants || invitePool.maxParticipants || 8),
+            teamSize: Number(bp.team_size || invitePool.teamSize || 4),
+            scoringGolfers: Number(bp.scoring_golfers || invitePool.scoringGolfers || 2),
+            cutLine: Number(bp.cut_line || invitePool.cutLine || 2),
+            shotClock: Number(bp.shot_clock || invitePool.shotClock || 60),
+            invite_token: bp.invite_token || token || invitePool.invite_token,
+            hostId: bp.host_id || invitePool.hostId || null,
+          };
+          joinPool(userId, mappedPool);
+          setActivePool(mappedPool);
+          setPoolPhase(mappedPool.status==="live"?"live":mappedPool.status==="draft"?"draft":"lobby");
+          setView("pool");
+          setAuthSuccess("");
+          clearHash();
+          notify(`Joined ${mappedPool.name}!`);
+          return;
+        } catch {}
+      }
+      joinPool(userId, invitePool);
       setActivePool(invitePool);
       setPoolPhase(invitePool.status==="live"?"live":invitePool.status==="complete"?"live":"lobby");
       setAuthSuccess("");
@@ -1315,8 +1566,8 @@ export default function GolfPoolPro() {
             </div>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               <div className="nav-user">
-                <Avatar init={currentUser ? (accounts.find(a=>a.id===currentUser)?.avatar||"AD") : "AD"} size={24} color="var(--gold)"/>
-                <span>{currentUser ? (accounts.find(a=>a.id===currentUser)?.name||"Account").split(" ")[0] : "Guest"}</span>
+                <Avatar init={currentUser ? (getEffectiveUserAvatar()||"AD") : "AD"} size={24} color="var(--gold)"/>
+                <span>{currentUser ? (getEffectiveUserName()||"Account").split(" ")[0] : "Guest"}</span>
               </div>
               <button onClick={()=>{setShowSettings(s=>!s);setPasswordMsg("");setNewPassword("");setConfirmPassword("");}}
                 style={{padding:"5px 12px",borderRadius:20,border:`1px solid ${showSettings?"rgba(200,169,79,.5)":"rgba(255,255,255,.18)"}`,background:showSettings?"rgba(200,169,79,.15)":"rgba(255,255,255,.06)",color:showSettings?"var(--gold)":"rgba(255,255,255,.55)",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",transition:"all .15s"}}>
@@ -1331,8 +1582,8 @@ export default function GolfPoolPro() {
           </nav>
           {/* ──────── SETTINGS PANEL ──────── */}
           {showSettings && (()=>{
-            const user = participants.find(p=>p.id===(currentUser||1));
-            const account = accounts.find(a=>a.id===(currentUser||1));
+            const user = participants.find(p=>p.id===getEffectiveUserId()) || {name:getEffectiveUserName(),avatar:getEffectiveUserAvatar(),email:getEffectiveUserEmail()};
+            const account = accounts.find(a=>a.id===currentUser) || {email:getEffectiveUserEmail()};
             return (
               <div style={{position:"fixed",top:66,right:16,zIndex:400,width:320,background:"#fff",borderRadius:16,boxShadow:"0 16px 48px rgba(27,67,50,.18),0 4px 12px rgba(27,67,50,.08)",border:"1px solid rgba(27,67,50,.08)",overflow:"hidden"}}>
                 <div style={{background:"var(--forest)",padding:"18px 20px",display:"flex",alignItems:"center",gap:12}}>
@@ -1500,7 +1751,7 @@ export default function GolfPoolPro() {
                 </div>
               )}
               {/* Delete button — host only */}
-              {activePool.hostId === (currentUser||1) && (
+              {activePool.hostId === (effectiveUserId||1) && (
                 confirmDelete ? (
                   <div style={{display:"flex",alignItems:"center",gap:8,background:"rgba(220,38,38,.15)",border:"1px solid rgba(220,38,38,.4)",borderRadius:10,padding:"8px 12px"}}>
                     <span style={{fontSize:12,color:"#FCA5A5",fontWeight:600}}>Delete this pool?</span>
@@ -1563,10 +1814,23 @@ export default function GolfPoolPro() {
                                 {isReady?"✓ Ready":"Waiting…"}
                               </p>
                             </div>
-                            {!isReady && (
-                              <button className="btn-ready" onClick={()=>setPoolReadyMap(m=>({...m,[p.id]:true}))}>
+                            {!isReady && p.id === effectiveUserId && (
+                              <button className="btn-ready" onClick={async ()=>{
+                                const uid = apiSession.get()?.id || currentUser;
+                                if (apiToken.get() && activePool?.id && uid === p.id) {
+                                  try {
+                                    await Pools.setReady(activePool.id, true);
+                                    setPoolReadyMap(m=>({...m,[p.id]:true}));
+                                    return;
+                                  } catch {}
+                                }
+                                setPoolReadyMap(m=>({...m,[p.id]:true}));
+                              }}>
                                 Ready
                               </button>
+                            )}
+                            {!isReady && p.id !== effectiveUserId && (
+                              <span style={{fontSize:11,color:"var(--muted)"}}>Waiting</span>
                             )}
                             {isReady && <span style={{fontSize:20}}>✅</span>}
                           </div>
@@ -1605,7 +1869,7 @@ export default function GolfPoolPro() {
                       <h4 className="h4" style={{marginBottom:8}}>Invite More Players</h4>
                       <p className="sub" style={{marginBottom:12,fontSize:13}}>Share this link so others can log in or create an account to join.</p>
                       <div className="link-box" style={{marginBottom:10}}>
-                        <span className="link-txt">{buildInviteUrl(activePool)}</span>
+                        <span className="link-txt" title={buildInviteUrl(activePool)}>{compactInviteUrl(activePool)}</span>
                         <div style={{display:"flex",gap:6,flexShrink:0}}>
                           <button className="btn btn-ghost btn-sm" onClick={()=>copyLink(buildInviteUrl(activePool))}>Copy</button>
                           <button className="btn btn-prim btn-sm" onClick={()=>openInvite(activePool)}>Preview</button>
@@ -1731,7 +1995,7 @@ export default function GolfPoolPro() {
                       </div>
                       <div style={{flex:1,overflowY:"auto",padding:"0 10px 10px"}}>
                         {filteredField.filter(g=>!drafted.find(d=>d.golferId===g.id)).map(g=>{
-                          const isMyTurn=draftActive&&!draftDone&&(!currentUser||currentParticipant?.id===currentUser);
+                          const isMyTurn=draftActive&&!draftDone&&(!effectiveUserId||currentParticipant?.id===effectiveUserId);
                           return (
                             <div key={g.id} className="pick-row"
                               onClick={()=>isMyTurn&&makePick(g.id)}>
@@ -2002,7 +2266,7 @@ export default function GolfPoolPro() {
                       <div>
                         {(()=>{
                           // "Your team" = first participant (James) or current user's team
-                          const myParticipant = joinedParticipants.find(p=>p.id===currentUser) || joinedParticipants[0];
+                          const myParticipant = joinedParticipants.find(p=>p.id===effectiveUserId) || joinedParticipants[0];
                           const myTeam = getPoolTeam(myParticipant.id);
                           const myRank = poolStandings.findIndex(p=>p.id===myParticipant.id)+1;
                           const myScore = getPoolScore(myParticipant.id);
@@ -2549,7 +2813,53 @@ export default function GolfPoolPro() {
                       </div>
                     ))}
                   </div>
-                  <button className="btn btn-prim" style={{width:"100%",justifyContent:"center"}} onClick={()=>{
+                  <button className="btn btn-prim" style={{width:"100%",justifyContent:"center"}} onClick={async ()=>{
+                    if (!config.tournament) {
+                      notify("Select a tournament first.", "error");
+                      return;
+                    }
+                    // Prefer backend pool creation for multi-user shared lobbies.
+                    if (apiToken.get()) {
+                      try {
+                        const resp = await Pools.create({
+                          name: config.poolName,
+                          tournament_id: config.tournament,
+                          max_participants: config.maxParticipants,
+                          team_size: config.teamSize,
+                          scoring_golfers: config.scoringGolfers,
+                          cut_line: config.cutLine,
+                          shot_clock: config.shotClock,
+                        });
+                        const bp = resp?.pool || {};
+                        const newPool = {
+                          id: bp.id,
+                          name: bp.name || config.poolName,
+                          tournamentId: bp.tournament_id || config.tournament,
+                          status: bp.status || "lobby",
+                          participants: 1,
+                          maxParticipants: Number(bp.max_participants || config.maxParticipants),
+                          teamSize: Number(bp.team_size || config.teamSize),
+                          scoringGolfers: Number(bp.scoring_golfers || config.scoringGolfers),
+                          cutLine: Number(bp.cut_line || config.cutLine),
+                          shotClock: Number(bp.shot_clock || config.shotClock),
+                          draftOrderType: config.draftOrderType,
+                          invite_token: bp.invite_token || pendingInviteToken,
+                          yourRank: null,
+                          yourScore: null,
+                          hostId: bp.host_id || getEffectiveUserId(),
+                          created: bp.created_at ? new Date(bp.created_at).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"}),
+                        };
+                        setPools((p)=>[...p.filter(x=>x.id!==newPool.id), newPool]);
+                        setActivePool(newPool);
+                        setPoolPhase("lobby");
+                        setPoolReadyMap({});
+                        setConfirmDelete(false);
+                        setView("pool");
+                        setPendingInviteToken(makeInviteToken());
+                        notify("Pool created! Share the invite link to get people in.");
+                        return;
+                      } catch {}
+                    }
                     const newPool = {
                       id:`p${Date.now()}`,
                       name:config.poolName,
@@ -2564,7 +2874,7 @@ export default function GolfPoolPro() {
                       draftOrderType:config.draftOrderType,
                       invite_token: pendingInviteToken,
                       yourRank:null,yourScore:null,
-                      hostId: currentUser||1,
+                      hostId: getEffectiveUserId()||1,
                       created: new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"})
                     };
                     setPools(p=>[...p,newPool]);
@@ -2573,7 +2883,6 @@ export default function GolfPoolPro() {
                     setPoolReadyMap({});
                     setConfirmDelete(false);
                     setView("pool");
-                    // Next pool creation gets a fresh token.
                     setPendingInviteToken(makeInviteToken());
                     notify("Pool created! Share the invite link to get people in.");
                   }}>
@@ -2617,7 +2926,9 @@ export default function GolfPoolPro() {
                     </div>
                   </div>
                   <div className="link-box" style={{marginBottom:16}}>
-                    <span className="link-txt">{activePool ? buildInviteUrl(activePool) : createFlowInviteUrl}</span>
+                    <span className="link-txt" title={activePool ? buildInviteUrl(activePool) : createFlowInviteUrl}>
+                      {activePool ? compactInviteUrl(activePool) : `${SITE_BASE}/#/join/${pendingInviteToken.slice(0,7)}…${pendingInviteToken.slice(-5)}`}
+                    </span>
                     <div style={{display:"flex",gap:6,flexShrink:0}}>
                       <button className="btn btn-ghost btn-sm" onClick={()=>copyLink(activePool ? buildInviteUrl(activePool) : createFlowInviteUrl)}>📋 Copy</button>
                       <button className="btn btn-prim btn-sm" onClick={()=>openInvite(activePool || null)}>👁️ Preview</button>
