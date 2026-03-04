@@ -485,6 +485,8 @@ const API_BASE = (
   import.meta.env.REACT_APP_API_URL ||
   "https://golfpoolpro.onrender.com"
 ).replace(/\/$/, "");
+const SCORE_REFRESH_MS = Math.max(1000, Number(import.meta.env.VITE_SCORE_REFRESH_MS || 30000));
+const SCORE_REFRESH_SECONDS = Math.ceil(SCORE_REFRESH_MS / 1000);
 const DEMO_EMAILS = new Set(["james@example.com","sarah@example.com","mike@example.com","emma@example.com","david@example.com"]);
 
 const fmtTDate = (isoDate) => {
@@ -611,7 +613,8 @@ export default function GolfPoolPro() {
   // Live scores state — updates every 5 minutes (matches GitHub Actions cron)
   const [liveScores,setLiveScores] = useState([]);
   const [lastUpdated,setLastUpdated] = useState(new Date());
-  const [countdown,setCountdown] = useState(30);
+  const [countdown,setCountdown] = useState(SCORE_REFRESH_SECONDS);
+  const nextRefreshAtRef = useRef(0);
 
   // ── Persist critical state to localStorage ──
   useEffect(()=>{ LS.set("mgpp_pools", pools); },[pools]);
@@ -674,7 +677,7 @@ export default function GolfPoolPro() {
           venue: t.venue || "TBD",
           date: fmtTDate(t.start_date || t.startDate),
           purse: t.purse ? `$${Number(t.purse).toLocaleString()}` : "TBD",
-          field: t.field_size || t.field || 156
+          field: Number(t.field_size || t.field) || null
         }));
         setTournaments(mapped);
       } catch {
@@ -691,7 +694,7 @@ export default function GolfPoolPro() {
       setApiGolfers([]);
       setLiveScores([]);
       setTournamentCourse(null);
-      setCountdown(30);
+      setCountdown(SCORE_REFRESH_SECONDS);
       return;
     }
 
@@ -731,11 +734,25 @@ export default function GolfPoolPro() {
       } catch {}
     };
 
+    const scheduleNextRefresh = () => {
+      nextRefreshAtRef.current = Date.now() + SCORE_REFRESH_MS;
+    };
+
     pull();
-    setCountdown(30);
-    const iv = setInterval(()=>setCountdown(c => c<=1 ? 30 : c-1), 1000);
-    const refresh = setInterval(pull, 30000);
-    return ()=>{ clearInterval(iv); clearInterval(refresh); };
+    scheduleNextRefresh();
+    setCountdown(SCORE_REFRESH_SECONDS);
+
+    const tick = setInterval(() => {
+      const remainingMs = Math.max(0, nextRefreshAtRef.current - Date.now());
+      setCountdown(Math.ceil(remainingMs / 1000));
+    }, 250);
+
+    const refresh = setInterval(() => {
+      pull();
+      scheduleNextRefresh();
+    }, SCORE_REFRESH_MS);
+
+    return ()=>{ clearInterval(tick); clearInterval(refresh); };
   },[selectedTournamentId]);
 
   useEffect(() => {
@@ -776,10 +793,20 @@ export default function GolfPoolPro() {
   // Active pool config
   const poolConfig = activePool || config;
   const golferCatalog = apiGolfers.length ? apiGolfers : FULL_FIELD;
+  const getTournamentById = (id) => tournaments.find(x=>x.id===id);
+  const getTournamentFieldSize = (id) => {
+    const t = getTournamentById(id);
+    const field = Number(t?.field);
+    if (Number.isFinite(field) && field > 0) return field;
+    if (id && id === selectedTournamentId && apiGolfers.length) return apiGolfers.length;
+    return golferCatalog.length;
+  };
   const poolTournamentField = (() => {
-    const t = tournaments.find(x=>x.id===poolConfig.tournamentId||x.id===poolConfig.tournament);
+    const tournamentId = poolConfig.tournamentId||poolConfig.tournament;
+    const t = getTournamentById(tournamentId);
     if(!t) return golferCatalog;
-    return golferCatalog.filter(p=>p.rank<=Math.min(t.field,golferCatalog.length));
+    const fieldLimit = Math.min(getTournamentFieldSize(tournamentId), golferCatalog.length);
+    return golferCatalog.filter(p=>p.rank<=fieldLimit);
   })();
   const findGolferById = (id) => poolTournamentField.find(x=>x.id===id) || apiGolfers.find(x=>x.id===id) || FULL_FIELD.find(x=>x.id===id);
 
@@ -1371,7 +1398,7 @@ export default function GolfPoolPro() {
                     <div className="card" style={{marginBottom:16}}>
                       {[
                         {l:"Tournament",v:tournaments.find(t=>t.id===activePool.tournamentId)?.name||"—",i:"⛳"},
-                        {l:"Field Size",v:`${poolTournamentField.length} players`,i:"👤"},
+                        {l:"Field Size",v:`${getTournamentFieldSize(activePool.tournamentId)} players`,i:"👤"},
                         {l:"Draft Format",v:`Snake · ${activePool.teamSize} rounds`,i:"🔄"},
                         {l:"Scoring",v:`Best ${activePool.scoringGolfers} of ${activePool.teamSize}`,i:"🎯"},
                         {l:"Shot Clock",v:`${activePool.shotClock}s`,i:"⏱️"},
@@ -1601,7 +1628,7 @@ export default function GolfPoolPro() {
               <div className="page">
                 <div className="update-bar">
                   <div className="pulse-dot"/>
-                  <span>Live scores · refreshing every 30s · Last updated {lastUpdated.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",second:"2-digit"})} · Next in {countdown}s</span>
+                  <span>Live scores · refreshing every {SCORE_REFRESH_SECONDS}s · Last updated {lastUpdated.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",second:"2-digit"})} · Next in {countdown}s</span>
                 </div>
 
                 {/* Pool standings header cards — uses poolStandings with real scores */}
@@ -2254,7 +2281,7 @@ export default function GolfPoolPro() {
                     return (
                       <div style={{background:"rgba(27,67,50,.05)",borderRadius:10,padding:"11px 14px",marginBottom:16,border:"1px solid rgba(27,67,50,.08)"}}>
                         <p style={{fontSize:13,fontWeight:600,color:"var(--forest)",marginBottom:3}}>{t.name}</p>
-                        <p style={{fontSize:12,color:"var(--muted)"}}>{t.venue} · {t.date} · {t.purse} purse · <strong>{Math.min(t.field,FULL_FIELD.length)} players</strong></p>
+                        <p style={{fontSize:12,color:"var(--muted)"}}>{t.venue} · {t.date} · {t.purse} purse · <strong>{getTournamentFieldSize(t.id)} players</strong></p>
                         {tournamentCourse && (
                           <p style={{fontSize:12,color:"var(--muted)",marginTop:5}}>
                             Course API: <strong>{tournamentCourse.name}</strong>
