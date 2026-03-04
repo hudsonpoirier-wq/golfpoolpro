@@ -204,6 +204,134 @@ function parsePlayersFromBody(body) {
   return [];
 }
 
+function coerceFieldPlayer(row) {
+  if (!row || typeof row !== "object") return null;
+  const name = normalizePlayerName(
+    row.name ||
+    row.player ||
+    row.player_name ||
+    row.full_name ||
+    row.strPlayer ||
+    row.PlayerName ||
+    row.golfer ||
+    row.golfer_name
+  );
+  if (!name) return null;
+  return {
+    name,
+    country: row.country || row.nationality || row.strCountry || null,
+    rank: row.rank || row.world_rank || row.intRank || row.position || null,
+  };
+}
+
+function extractPlayersFromPayload(payload) {
+  if (!payload) return [];
+
+  const directKeys = [
+    "players",
+    "playerstats",
+    "eventstats",
+    "leaderboard",
+    "results",
+    "field",
+    "entries",
+    "data",
+    "response",
+  ];
+
+  const players = [];
+  for (const key of directKeys) {
+    const value = payload[key];
+    if (Array.isArray(value)) {
+      players.push(...value.map(coerceFieldPlayer).filter(Boolean));
+    }
+  }
+
+  if (Array.isArray(payload)) {
+    players.push(...payload.map(coerceFieldPlayer).filter(Boolean));
+  }
+
+  // Some APIs nest arrays one level deeper under data/results.
+  for (const key of ["data", "results", "response"]) {
+    const value = payload[key];
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      for (const nestedVal of Object.values(value)) {
+        if (Array.isArray(nestedVal)) {
+          players.push(...nestedVal.map(coerceFieldPlayer).filter(Boolean));
+        }
+      }
+    }
+  }
+
+  return players;
+}
+
+function renderTemplateUrl(template, vars) {
+  let out = String(template || "");
+  for (const [k, v] of Object.entries(vars)) {
+    out = out.replaceAll(`{${k}}`, encodeURIComponent(String(v ?? "")));
+  }
+  return out;
+}
+
+async function fetchRapidApiFieldPlayers(tournament) {
+  const rapidKey = process.env.RAPIDAPI_GOLF_KEY || process.env.RAPIDAPI_KEY;
+  const rapidHost = process.env.RAPIDAPI_GOLF_HOST || process.env.RAPIDAPI_HOST;
+  const rapidBase = (
+    process.env.RAPIDAPI_GOLF_BASE_URL ||
+    process.env.RAPIDAPI_BASE_URL ||
+    ""
+  ).replace(/\/+$/, "");
+  const customTemplate = process.env.RAPIDAPI_GOLF_FIELD_URL_TEMPLATE || "";
+
+  if (!rapidKey || !rapidHost) return { players: [], provider: null, urlsTried: [] };
+
+  const vars = {
+    id: tournament?.id || "",
+    tsdb_event_id: String(tournament?.id || "").startsWith("tsdb_") ? String(tournament.id).slice(5) : "",
+    name: tournament?.name || "",
+    start_date: tournament?.start_date || "",
+    year: String(tournament?.start_date || "").slice(0, 4),
+  };
+
+  const urls = [];
+  if (customTemplate) urls.push(renderTemplateUrl(customTemplate, vars));
+  if (rapidBase && tournament?.name) {
+    urls.push(
+      `${rapidBase}/leaderboard?event=${encodeURIComponent(tournament.name)}`,
+      `${rapidBase}/leaderboard?name=${encodeURIComponent(tournament.name)}`,
+      `${rapidBase}/events?name=${encodeURIComponent(tournament.name)}`,
+      `${rapidBase}/tournaments?name=${encodeURIComponent(tournament.name)}`
+    );
+  }
+  if (rapidBase && vars.tsdb_event_id) {
+    urls.push(
+      `${rapidBase}/leaderboard?eventId=${encodeURIComponent(vars.tsdb_event_id)}`,
+      `${rapidBase}/event?eventId=${encodeURIComponent(vars.tsdb_event_id)}`
+    );
+  }
+
+  const dedupedUrls = Array.from(new Set(urls.filter(Boolean)));
+  const headers = {
+    "x-rapidapi-key": rapidKey,
+    "x-rapidapi-host": rapidHost,
+  };
+
+  for (const url of dedupedUrls) {
+    try {
+      const resp = await fetch(url, { headers, timeout: 12000 });
+      if (!resp.ok) continue;
+      const json = await resp.json();
+      const players = extractPlayersFromPayload(json);
+      if (players.length) {
+        return { players, provider: "RapidAPI", url, urlsTried: dedupedUrls };
+      }
+    } catch {}
+  }
+
+  return { players: [], provider: "RapidAPI", urlsTried: dedupedUrls };
+}
+
 async function importFieldPlayersIntoTournament(tournamentId, players) {
   const uniqueByName = new Map();
   for (const p of players) {
@@ -283,46 +411,50 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
     }
 
     const { tournamentId } = req.params;
+    const { data: tournament } = await supabase
+      .from("tournaments")
+      .select("id, name, start_date")
+      .eq("id", tournamentId)
+      .single();
+    if (!tournament) return res.status(404).json({ error: "Tournament not found." });
+
     const eventId = String(tournamentId || "").startsWith("tsdb_")
       ? String(tournamentId).slice(5)
       : await resolveTheSportsDbEventId(tournamentId, supabase);
-    if (!eventId) return res.status(404).json({ error: "No TheSportsDB event id could be resolved for this tournament." });
-
-    const tsdbKey = process.env.THE_SPORTS_DB_KEY || "3";
-    const base = `https://www.thesportsdb.com/api/v1/json/${tsdbKey}`;
-    const urls = [
-      `${base}/lookupeventstats.php?id=${encodeURIComponent(eventId)}`,
-      `${base}/lookupevent.php?id=${encodeURIComponent(eventId)}`,
-      `${base}/lookupround.php?id=${encodeURIComponent(eventId)}`,
-    ];
 
     let players = [];
-    for (const url of urls) {
-      try {
-        const resp = await fetch(url, { timeout: 12000 });
-        if (!resp.ok) continue;
-        const json = await resp.json();
-        const lists = [
-          json?.players,
-          json?.playerstats,
-          json?.eventstats,
-          json?.leaderboard,
-          json?.results,
-        ].filter(Array.isArray);
-        for (const list of lists) {
-          players.push(...list.map((row) => ({
-            name: row.strPlayer || row.player || row.name || row.PlayerName || row.player_name,
-            country: row.strCountry || row.country || row.nationality || null,
-            rank: row.rank || row.intRank || row.position || null,
-          })).filter((p) => p.name));
-        }
-      } catch {}
+    if (eventId) {
+      const tsdbKey = process.env.THE_SPORTS_DB_KEY || "3";
+      const base = `https://www.thesportsdb.com/api/v1/json/${tsdbKey}`;
+      const urls = [
+        `${base}/lookupeventstats.php?id=${encodeURIComponent(eventId)}`,
+        `${base}/lookupevent.php?id=${encodeURIComponent(eventId)}`,
+        `${base}/lookupround.php?id=${encodeURIComponent(eventId)}`,
+      ];
+
+      for (const url of urls) {
+        try {
+          const resp = await fetch(url, { timeout: 12000 });
+          if (!resp.ok) continue;
+          const json = await resp.json();
+          players.push(...extractPlayersFromPayload(json));
+        } catch {}
+      }
     }
 
-    // Deduplicate and import
+    // TheSportsDB often has no field list for future events; fall back to RapidAPI provider.
+    if (!players.length) {
+      const rapid = await fetchRapidApiFieldPlayers(tournament);
+      if (rapid.players?.length) {
+        players = rapid.players;
+      }
+    }
+
     players = players.filter((p) => p.name);
     if (!players.length) {
-      return res.status(404).json({ error: "No player list found from TheSportsDB for this tournament yet." });
+      return res.status(404).json({
+        error: "No player list found from TheSportsDB or RapidAPI for this tournament yet.",
+      });
     }
 
     const result = await importFieldPlayersIntoTournament(tournamentId, players);
@@ -331,9 +463,9 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
     return res.json({
       imported: result.imported || 0,
       tournament_id: tournamentId,
-      source: "TheSportsDB",
-      event_id: String(eventId),
-      message: "Auto-imported tournament field from TheSportsDB.",
+      source: eventId ? "TheSportsDB/RapidAPI" : "RapidAPI",
+      event_id: eventId ? String(eventId) : null,
+      message: "Auto-imported tournament field.",
     });
   } catch (e) {
     return next(e);

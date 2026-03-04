@@ -45,6 +45,15 @@ RAPIDAPI_DAILY_LIMIT=50
 RAPIDAPI_TIMEZONE=America/New_York
 RAPIDAPI_WINDOW_START_HOUR=8
 RAPIDAPI_WINDOW_END_HOUR=19
+
+# RapidAPI tournament-player fallback (for import-field-auto)
+# Recommended provider from RapidAPI search: "Live Golf Data" (slashgolf)
+RAPIDAPI_GOLF_KEY=your-rapidapi-key
+RAPIDAPI_GOLF_HOST=live-golf-data.p.rapidapi.com
+RAPIDAPI_GOLF_BASE_URL=https://live-golf-data.p.rapidapi.com
+# Optional: set if your chosen provider uses a different endpoint shape
+# Placeholders available: {id} {tsdb_event_id} {name} {start_date} {year}
+RAPIDAPI_GOLF_FIELD_URL_TEMPLATE=
 ```
 
 3. Start website (frontend + backend):
@@ -78,7 +87,7 @@ VITE_SITE_URL=https://golfpoolpro.vercel.app
   - `GET /api/courses/tournament/:id`
 - Admin field import endpoint:
   - `POST /api/admin/import-field/:tournamentId` with `x-admin-token`
-  - `POST /api/admin/import-field-auto/:tournamentId` (auto from TheSportsDB)
+  - `POST /api/admin/import-field-auto/:tournamentId` (auto from TheSportsDB, fallback to RapidAPI golf provider)
   - Body supports either:
     - JSON: `{"players":[{"name":"Scottie Scheffler","country":"USA","world_rank":1}]}`
     - CSV text: `{"csv":"name,country,world_rank\nScottie Scheffler,USA,1"}`
