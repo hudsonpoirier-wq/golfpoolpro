@@ -921,6 +921,37 @@ export default function GolfPoolPro() {
     }
   }, [currentUser]);
 
+  // Hydrate/validate backend auth session so "logged in" always matches server state.
+  useEffect(() => {
+    const t = apiToken.get();
+    if (!t) return;
+    let cancelled = false;
+    const hydrate = async () => {
+      try {
+        const resp = await Auth.me();
+        const u = resp?.user;
+        if (cancelled || !u?.id) return;
+        apiSession.set(u);
+        setCurrentUser(u.id);
+        LS.set("mgpp_session", u.id);
+        ensureParticipant({
+          id: u.id,
+          name: u.name || u.email || "User",
+          email: u.email || "",
+          avatar: u.avatar || (u.name || "U").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase(),
+        });
+      } catch {
+        if (!cancelled) {
+          try { apiToken.clear(); } catch {}
+          setCurrentUser(null);
+          setAuthMode("login");
+        }
+      }
+    };
+    hydrate();
+    return () => { cancelled = true; };
+  }, []);
+
   // Pull pools from backend for authenticated sessions (shared across users/devices).
   useEffect(() => {
     if (!apiToken.get()) return;
@@ -1008,6 +1039,7 @@ export default function GolfPoolPro() {
           shotClock: Number(resp?.pool?.shot_clock || pool.shotClock || 60),
           tournamentId: resp?.pool?.tournament_id || pool.tournamentId,
           invite_token: resp?.pool?.invite_token || pool.invite_token,
+          hostId: resp?.pool?.host_id || pool.hostId,
         }) : pool);
         const nextStatus = resp?.pool?.status || activePool.status;
         if (nextStatus === "draft") setPoolPhase("draft");
@@ -1062,6 +1094,7 @@ export default function GolfPoolPro() {
   );
 
   const activePoolMemberIds = activePool ? (poolMembers[activePool.id] || []) : [];
+  const isHostOfActivePool = String(activePool?.hostId || activePool?.host_id || "") === String(effectiveUserId || "");
   const joinedParticipants = (() => {
     if (!activePool) return participants.filter(p=>p.joined);
     const members = participants.filter(p=>activePoolMemberIds.some((id)=>String(id)===String(p.id)));
@@ -1271,7 +1304,7 @@ export default function GolfPoolPro() {
   const openInvite = (pool) => {
     setInvitePool(pool);
     setInviteView(true);
-    setAuthMode((apiSession.get()?.id || currentUser) ? "join" : "login");
+    setAuthMode((apiToken.get() && (apiSession.get()?.id || currentUser)) ? "join" : "login");
     setAuthEmail(""); setAuthPass(""); setAuthName(""); setAuthError(""); setAuthSuccess("");
     setForgotSent(false);
     setView("invite");
@@ -1423,7 +1456,21 @@ export default function GolfPoolPro() {
     if (!userId || !invitePool) return;
     try {
       if (!apiToken.get()) {
-        setAuthError("Please log in first to join this pool.");
+        setAuthError("Please log in to your account, then join the pool.");
+        setAuthMode("login");
+        return;
+      }
+      try {
+        const me = await Auth.me();
+        const meId = me?.user?.id;
+        if (!meId) throw new Error("No active session");
+        if (String(meId) !== String(userId)) {
+          setCurrentUser(meId);
+          LS.set("mgpp_session", meId);
+        }
+      } catch {
+        setAuthError("Your session expired. Please log in again.");
+        setAuthMode("login");
         return;
       }
       // Try backend join when we have a real invite token/session; local-mode fallback below.
@@ -1714,7 +1761,7 @@ export default function GolfPoolPro() {
                 </div>
               )}
               {/* Delete button — host only */}
-              {String(activePool.hostId||"") === String(effectiveUserId||1) && (
+              {isHostOfActivePool && (
                 confirmDelete ? (
                   <div style={{display:"flex",alignItems:"center",gap:8,background:"rgba(220,38,38,.15)",border:"1px solid rgba(220,38,38,.4)",borderRadius:10,padding:"8px 12px"}}>
                     <span style={{fontSize:12,color:"#FCA5A5",fontWeight:600}}>Delete this pool?</span>
@@ -1800,7 +1847,7 @@ export default function GolfPoolPro() {
                         );
                       })}
                     </div>
-                    {!allReady && String(activePool.hostId||"") === String(effectiveUserId||"") && (
+                    {!allReady && isHostOfActivePool && (
                       <button className="btn btn-ghost btn-sm" style={{marginTop:8}} onClick={()=>{
                         const allMap = {};
                         joinedParticipants.forEach(p=>{ allMap[p.id]=true; });
