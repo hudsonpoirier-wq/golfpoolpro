@@ -206,6 +206,21 @@ function parsePlayersFromBody(body) {
 
 function coerceFieldPlayer(row) {
   if (!row || typeof row !== "object") return null;
+  const hasPlayerSignal = Boolean(
+    row.strPlayer ||
+    row.player ||
+    row.player_name ||
+    row.full_name ||
+    row.PlayerName ||
+    row.golfer ||
+    row.golfer_name ||
+    row.first_name ||
+    row.last_name ||
+    row.abbr_name ||
+    row.competitor?.name
+  );
+  if (!hasPlayerSignal) return null;
+
   const name = normalizePlayerName(
     row.name ||
     row.player ||
@@ -214,7 +229,9 @@ function coerceFieldPlayer(row) {
     row.strPlayer ||
     row.PlayerName ||
     row.golfer ||
-    row.golfer_name
+    row.golfer_name ||
+    row.competitor?.name ||
+    [row.first_name, row.last_name].filter(Boolean).join(" ")
   );
   if (!name) return null;
   return {
@@ -229,12 +246,19 @@ function extractPlayersFromPayload(payload) {
 
   const directKeys = [
     "players",
+    "player",
     "playerstats",
     "eventstats",
     "leaderboard",
     "results",
     "field",
     "entries",
+    "competitors",
+    "competitor",
+    "participants",
+    "participant",
+    "statistics",
+    "standings",
     "data",
     "response",
   ];
