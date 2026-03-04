@@ -1,0 +1,11 @@
+node_modules/
+client/node_modules/
+server/node_modules/
+.venv/
+.env
+.env.*
+client/.env
+server/.env
+imported/
+mnt/
+.DS_Store

@@ -1,0 +1,227 @@
+// server/routes/pools.js
+
+const router = require("express").Router();
+const { requireAuth } = require("../middleware/auth");
+
+// ─── GET /api/pools ───────────────────────────────────────────
+// Returns all pools the current user is a member of
+router.get("/", requireAuth, async (req, res, next) => {
+  try {
+    const sb = req.app.locals.supabase;
+
+    // Get pool IDs for this user
+    const { data: memberships, error: mErr } = await sb
+      .from("pool_members")
+      .select("pool_id")
+      .eq("user_id", req.user.id);
+    if (mErr) return res.status(500).json({ error: mErr.message });
+
+    const poolIds = memberships.map(m => m.pool_id);
+    if (!poolIds.length) return res.json({ pools: [] });
+
+    const { data: pools, error: pErr } = await sb
+      .from("pools")
+      .select(`
+        id, name, status, max_participants, team_size, scoring_golfers,
+        cut_line, shot_clock, created_at, host_id, invite_token,
+        tournament:tournaments(id, name, venue, start_date, end_date, purse, field_size)
+      `)
+      .in("id", poolIds)
+      .order("created_at", { ascending: false });
+    if (pErr) return res.status(500).json({ error: pErr.message });
+
+    // Attach member count and user's rank to each pool
+    const enriched = await Promise.all(pools.map(async pool => {
+      const { data: members } = await sb
+        .from("pool_members")
+        .select("user_id")
+        .eq("pool_id", pool.id);
+
+      const { data: standings } = await sb
+        .from("pool_standings")
+        .select("user_id, score")
+        .eq("pool_id", pool.id)
+        .order("score", { ascending: true });
+
+      const userStanding = standings?.findIndex(s => s.user_id === req.user.id);
+      const userScore = standings?.find(s => s.user_id === req.user.id)?.score;
+
+      return {
+        ...pool,
+        participants: members?.length || 0,
+        yourRank: userStanding >= 0 ? userStanding + 1 : null,
+        yourScore: userScore ?? null,
+      };
+    }));
+
+    res.json({ pools: enriched });
+  } catch (e) { next(e); }
+});
+
+// ─── GET /api/pools/:id ───────────────────────────────────────
+router.get("/:id", requireAuth, async (req, res, next) => {
+  try {
+    const sb = req.app.locals.supabase;
+    const { id } = req.params;
+
+    // Verify membership
+    const { data: member } = await sb
+      .from("pool_members")
+      .select("is_ready")
+      .eq("pool_id", id)
+      .eq("user_id", req.user.id)
+      .single();
+    if (!member) return res.status(403).json({ error: "You are not a member of this pool." });
+
+    const { data: pool, error } = await sb
+      .from("pools")
+      .select(`
+        *,
+        tournament:tournaments(*),
+        host:profiles!pools_host_id_fkey(id, name, avatar)
+      `)
+      .eq("id", id)
+      .single();
+    if (error || !pool) return res.status(404).json({ error: "Pool not found." });
+
+    // Members
+    const { data: members } = await sb
+      .from("pool_members")
+      .select("user_id, is_ready, joined_at, profile:profiles(id, name, avatar, email)")
+      .eq("pool_id", id);
+
+    // Draft picks
+    const { data: picks } = await sb
+      .from("draft_picks")
+      .select("user_id, golfer_id, pick_number, picked_at")
+      .eq("pool_id", id)
+      .order("pick_number");
+
+    // Standings
+    const { data: standings } = await sb
+      .from("pool_standings")
+      .select("*")
+      .eq("pool_id", id)
+      .order("score", { ascending: true });
+
+    res.json({ pool, members, picks, standings });
+  } catch (e) { next(e); }
+});
+
+// ─── POST /api/pools ──────────────────────────────────────────
+// Create a new pool
+router.post("/", requireAuth, async (req, res, next) => {
+  try {
+    const sb = req.app.locals.supabase;
+    const {
+      name, tournament_id, max_participants = 8,
+      team_size = 4, scoring_golfers = 2,
+      cut_line = 2, shot_clock = 60,
+    } = req.body;
+
+    if (!name?.trim()) return res.status(400).json({ error: "Pool name is required." });
+    if (!tournament_id) return res.status(400).json({ error: "Tournament is required." });
+
+    const { data: pool, error } = await sb
+      .from("pools")
+      .insert({
+        name: name.trim(),
+        tournament_id,
+        host_id: req.user.id,
+        max_participants,
+        team_size,
+        scoring_golfers,
+        cut_line,
+        shot_clock,
+        status: "lobby",
+      })
+      .select()
+      .single();
+    if (error) return res.status(400).json({ error: error.message });
+
+    // Host automatically joins their own pool
+    await sb.from("pool_members").insert({ pool_id: pool.id, user_id: req.user.id, is_ready: false });
+
+    res.status(201).json({ pool });
+  } catch (e) { next(e); }
+});
+
+// ─── PATCH /api/pools/:id ─────────────────────────────────────
+// Update pool settings (host only)
+router.patch("/:id", requireAuth, async (req, res, next) => {
+  try {
+    const sb = req.app.locals.supabase;
+    const { id } = req.params;
+
+    const { data: pool } = await sb.from("pools").select("host_id").eq("id", id).single();
+    if (!pool) return res.status(404).json({ error: "Pool not found." });
+    if (pool.host_id !== req.user.id) return res.status(403).json({ error: "Only the host can edit pool settings." });
+
+    const allowed = ["name","status","max_participants","team_size","scoring_golfers","cut_line","shot_clock"];
+    const updates = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)));
+
+    const { data, error } = await sb.from("pools").update(updates).eq("id", id).select().single();
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ pool: data });
+  } catch (e) { next(e); }
+});
+
+// ─── DELETE /api/pools/:id ────────────────────────────────────
+router.delete("/:id", requireAuth, async (req, res, next) => {
+  try {
+    const sb = req.app.locals.supabase;
+    const { id } = req.params;
+
+    const { data: pool } = await sb.from("pools").select("host_id").eq("id", id).single();
+    if (!pool) return res.status(404).json({ error: "Pool not found." });
+    if (pool.host_id !== req.user.id) return res.status(403).json({ error: "Only the host can delete this pool." });
+
+    await sb.from("pools").delete().eq("id", id);
+    res.json({ message: "Pool deleted." });
+  } catch (e) { next(e); }
+});
+
+// ─── PATCH /api/pools/:id/ready ───────────────────────────────
+// Toggle current user's ready status
+router.patch("/:id/ready", requireAuth, async (req, res, next) => {
+  try {
+    const sb = req.app.locals.supabase;
+    const { id } = req.params;
+    const { is_ready } = req.body;
+
+    const { error } = await sb
+      .from("pool_members")
+      .update({ is_ready })
+      .eq("pool_id", id)
+      .eq("user_id", req.user.id);
+    if (error) return res.status(400).json({ error: error.message });
+
+    // Check if ALL members are ready — if so, auto-advance to draft
+    const { data: members } = await sb
+      .from("pool_members")
+      .select("is_ready")
+      .eq("pool_id", id);
+    const allReady = members?.length >= 2 && members.every(m => m.is_ready);
+    if (allReady) {
+      await sb.from("pools").update({ status: "draft" }).eq("id", id);
+    }
+
+    res.json({ allReady });
+  } catch (e) { next(e); }
+});
+
+// ─── GET /api/pools/:id/standings ─────────────────────────────
+router.get("/:id/standings", requireAuth, async (req, res, next) => {
+  try {
+    const sb = req.app.locals.supabase;
+    const { data, error } = await sb
+      .from("pool_standings")
+      .select("*")
+      .eq("pool_id", req.params.id)
+      .order("score", { ascending: true });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ standings: data });
+  } catch (e) { next(e); }
+});
+
+module.exports = router;

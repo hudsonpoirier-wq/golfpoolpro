@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GolfPoolPro</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero card">
+        <div>
+          <p class="eyebrow">Premier Competition Platform</p>
+          <h1>GolfPoolPro</h1>
+          <p class="subtitle">
+            Build and run high-stakes golf pools with granular controls, real-time draft pressure, and live analytics down to the hole.
+          </p>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="card">
+          <h2>Admin Configuration</h2>
+          <form id="config-form" class="stack">
+            <label>
+              Participant Capacity
+              <input type="number" min="2" max="200" name="participantCapacity" value="24" required />
+            </label>
+            <label>
+              Team Roster Size
+              <input type="number" min="1" max="12" name="rosterSize" value="6" required />
+            </label>
+            <label>
+              Cut Line Threshold
+              <input type="number" min="1" max="12" name="cutLineThreshold" value="3" required />
+            </label>
+            <label>
+              Draft Shot Clock (seconds)
+              <input type="number" min="10" max="180" name="shotClockSeconds" value="60" required />
+            </label>
+            <label>
+              Tournament (Future Events)
+              <select id="tournament-select" name="tournamentId" required>
+                <option value="">Loading future tournaments...</option>
+              </select>
+            </label>
+            <button type="submit">Save Configuration</button>
+          </form>
+          <p id="config-status" class="status"></p>
+        </article>
+
+        <article class="card">
+          <h2>Dual-Link Entry</h2>
+          <p class="muted">Step 1: Invitation Link (Email + Password registration)</p>
+          <p id="invitation-link" class="linkline">Not generated</p>
+          <p class="muted">Step 2: Lobby Link (after field lock)</p>
+          <p id="lobby-link" class="linkline">Not generated</p>
+          <button id="generate-links">Generate Entry Links</button>
+        </article>
+      </section>
+
+      <section class="grid">
+        <article class="card">
+          <div class="split">
+            <h2>Live Draft Engine</h2>
+            <button id="start-draft">Start Draft</button>
+          </div>
+          <div class="clock">
+            <span>Shot Clock</span>
+            <strong id="shot-clock">--</strong>
+          </div>
+          <div class="split">
+            <div>
+              <h3>Draft Order</h3>
+              <ol id="draft-order" class="list"></ol>
+            </div>
+            <div>
+              <h3>Available Golfers</h3>
+              <ul id="available-golfers" class="list"></ul>
+            </div>
+          </div>
+        </article>
+
+        <article class="card">
+          <h2>Live Analytics Hub</h2>
+          <div class="stats">
+            <div class="chip">
+              <span>Projected Winning Score</span>
+              <strong id="winning-projection">--</strong>
+            </div>
+            <div class="chip">
+              <span>Volatility</span>
+              <strong id="volatility">--</strong>
+            </div>
+          </div>
+          <h3>Leaderboard</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Team</th>
+                <th>Score</th>
+                <th>Cut Eligible</th>
+              </tr>
+            </thead>
+            <tbody id="leaderboard-body"></tbody>
+          </table>
+        </article>
+      </section>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
