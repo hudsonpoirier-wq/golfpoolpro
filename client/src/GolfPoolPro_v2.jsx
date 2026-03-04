@@ -602,7 +602,7 @@ export default function GolfPoolPro() {
   // Invite / auth state
   const [inviteView,setInviteView] = useState(false);
   const [invitePool,setInvitePool] = useState(null);
-  const [authMode,setAuthMode] = useState("login"); // "login"|"signup"|"forgot"
+  const [authMode,setAuthMode] = useState("login"); // "login"|"signup"|"forgot"|"join"
   const [authEmail,setAuthEmail] = useState("");
   const [authPass,setAuthPass] = useState("");
   const [authName,setAuthName] = useState("");
@@ -691,6 +691,7 @@ export default function GolfPoolPro() {
           teamSize: resolved.team_size || 4,
           scoringGolfers: resolved.scoring_golfers || 2,
           tournamentId: resolved.tournament?.id || "",
+          tournamentName: resolved.tournament?.name || "",
           invite_token: resolved.invite_token || token,
           hostId: resolved.host_id || null,
         };
@@ -1027,7 +1028,7 @@ export default function GolfPoolPro() {
   const openInvite = (pool) => {
     setInvitePool(pool);
     setInviteView(true);
-    setAuthMode("login");
+    setAuthMode(currentUser ? "join" : "login");
     setAuthEmail(""); setAuthPass(""); setAuthName(""); setAuthError(""); setAuthSuccess("");
     setForgotSent(false);
     setView("invite");
@@ -1091,7 +1092,8 @@ export default function GolfPoolPro() {
     LS.set("mgpp_session", acct.id);
     if(invitePool){
       setAuthError("");
-      setAuthSuccess(`Logged in as ${acct.name}. Click "Join Pool" below.`);
+      setAuthSuccess(`Logged in as ${acct.name}. Review the pool details, then tap Join Pool.`);
+      setAuthMode("join");
       notify(`Welcome back, ${acct.name.split(" ")[0]}!`);
       setInviteView(true);
       setView("invite");
@@ -1117,7 +1119,8 @@ export default function GolfPoolPro() {
     LS.set("mgpp_session", newId);
     if(invitePool){
       setAuthError("");
-      setAuthSuccess(`Account created. Click "Join Pool" to enter ${invitePool.name}.`);
+      setAuthSuccess(`Account created. Review the pool details, then tap Join Pool.`);
+      setAuthMode("join");
       notify(`Welcome to MyGolfPoolPro, ${authName.split(" ")[0]}!`);
       setInviteView(true);
       setView("invite");
@@ -2589,7 +2592,9 @@ export default function GolfPoolPro() {
                   <div style={{background:"var(--forest)",borderRadius:12,padding:"16px 20px",color:"#fff",marginBottom:0}}>
                     <p style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"1px",color:"rgba(255,255,255,.55)",marginBottom:4}}>You've been invited to</p>
                     <p style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:700}}>{invitePool.name}</p>
-                    <p style={{fontSize:12,color:"rgba(255,255,255,.6)",marginTop:2}}>{tournaments.find(t=>t.id===invitePool.tournamentId)?.name}</p>
+                    <p style={{fontSize:12,color:"rgba(255,255,255,.6)",marginTop:2}}>
+                      {invitePool.tournamentName || tournaments.find(t=>t.id===invitePool.tournamentId)?.name || "Tournament TBD"}
+                    </p>
                   </div>
                 )}
                 {!invitePool && (
@@ -2597,7 +2602,7 @@ export default function GolfPoolPro() {
                 )}
               </div>
 
-              {authMode!=="forgot" && (
+              {(authMode==="login" || authMode==="signup") && (
                 <div className="auth-tabs">
                   <button className={`auth-tab ${authMode==="login"?"on":""}`} onClick={()=>{setAuthMode("login");setAuthError("");setAuthSuccess("");}}>Log In</button>
                   <button className={`auth-tab ${authMode==="signup"?"on":""}`} onClick={()=>{setAuthMode("signup");setAuthError("");setAuthSuccess("");}}>Create Account</button>
@@ -2689,19 +2694,58 @@ export default function GolfPoolPro() {
                 </div>
               )}
 
-              {authMode!=="forgot" && authSuccess && (
+              {authMode==="join" && invitePool && (
+                <div>
+                  <h3 className="h3" style={{marginBottom:8}}>Review Pool Details</h3>
+                  <p className="sub" style={{fontSize:13,marginBottom:14}}>
+                    You are signed in. Click Join Pool to enter this pool and add it to your My Pools list.
+                  </p>
+                  <div style={{background:"var(--cream)",border:"1px solid var(--cream-2)",borderRadius:12,padding:"14px 16px",marginBottom:14}}>
+                    <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--cream-2)"}}>
+                      <span style={{fontSize:12,color:"var(--muted)",fontWeight:700,letterSpacing:".3px"}}>POOL</span>
+                      <span style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{invitePool.name}</span>
+                    </div>
+                    <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--cream-2)"}}>
+                      <span style={{fontSize:12,color:"var(--muted)",fontWeight:700,letterSpacing:".3px"}}>TOURNAMENT</span>
+                      <span style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>
+                        {invitePool.tournamentName || tournaments.find(t=>t.id===invitePool.tournamentId)?.name || "TBD"}
+                      </span>
+                    </div>
+                    <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--cream-2)"}}>
+                      <span style={{fontSize:12,color:"var(--muted)",fontWeight:700,letterSpacing:".3px"}}>SPOTS</span>
+                      <span style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>
+                        {Number(invitePool.participants || 0)}/{Number(invitePool.maxParticipants || 8)}
+                      </span>
+                    </div>
+                    <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--cream-2)"}}>
+                      <span style={{fontSize:12,color:"var(--muted)",fontWeight:700,letterSpacing:".3px"}}>TEAM SIZE</span>
+                      <span style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{invitePool.teamSize || 4} golfers</span>
+                    </div>
+                    <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0"}}>
+                      <span style={{fontSize:12,color:"var(--muted)",fontWeight:700,letterSpacing:".3px"}}>STATUS</span>
+                      <span style={{fontSize:13,fontWeight:700,color:"var(--text)",textTransform:"capitalize"}}>{invitePool.status || "lobby"}</span>
+                    </div>
+                  </div>
+                  {authError && <p style={{color:"var(--red)",fontSize:13,marginBottom:12,fontWeight:600}}>{authError}</p>}
+                  <button
+                    className="btn btn-prim"
+                    style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginBottom:10}}
+                    onClick={handleJoinInvitedPool}
+                  >
+                    Join Pool
+                  </button>
+                  <div style={{textAlign:"center"}}>
+                    <button className="btn-link" onClick={()=>{setAuthMode("login");setAuthPass("");setAuthError("");setAuthSuccess("");}}>
+                      Use a different account
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {authMode!=="forgot" && authMode!=="join" && authSuccess && (
                 <p style={{color:"var(--green)",fontSize:13,marginTop:14,fontWeight:700,textAlign:"center"}}>{authSuccess}</p>
               )}
 
-              {authMode!=="forgot" && currentUser && invitePool && (
-                <button
-                  className="btn btn-prim"
-                  style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginTop:12}}
-                  onClick={handleJoinInvitedPool}
-                >
-                  Join Pool
-                </button>
-              )}
             </div>
           </div>
         )}
