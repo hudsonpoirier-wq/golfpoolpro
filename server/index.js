@@ -332,6 +332,65 @@ async function fetchRapidApiFieldPlayers(tournament) {
   return { players: [], provider: "RapidAPI", urlsTried: dedupedUrls };
 }
 
+async function fetchSportradarFieldPlayers(tournament) {
+  const apiKey = process.env.SPORTRADAR_API_KEY || "";
+  const baseUrl = (process.env.SPORTRADAR_GOLF_BASE_URL || "").replace(/\/+$/, "");
+  const accessLevel = process.env.SPORTRADAR_ACCESS_LEVEL || "trial";
+  const version = process.env.SPORTRADAR_GOLF_VERSION || "v3";
+  const language = process.env.SPORTRADAR_LANG || "en";
+  const customTemplate = process.env.SPORTRADAR_GOLF_FIELD_URL_TEMPLATE || "";
+  const tournamentMapRaw = process.env.SPORTRADAR_TOURNAMENT_MAP || "{}";
+  let tournamentMap = {};
+  try { tournamentMap = JSON.parse(tournamentMapRaw); } catch {}
+
+  if (!apiKey || !baseUrl) return { players: [], provider: null, urlsTried: [] };
+
+  const mappedId = tournamentMap?.[tournament?.id] || "";
+  const vars = {
+    id: tournament?.id || "",
+    sportradar_tournament_id: mappedId,
+    name: tournament?.name || "",
+    start_date: tournament?.start_date || "",
+    year: String(tournament?.start_date || "").slice(0, 4),
+    api_key: apiKey,
+    access_level: accessLevel,
+    version,
+    language,
+  };
+
+  const urls = [];
+  if (customTemplate) {
+    urls.push(renderTemplateUrl(customTemplate, vars));
+  }
+  if (mappedId) {
+    urls.push(
+      `${baseUrl}/${accessLevel}/${version}/${language}/tournaments/${encodeURIComponent(mappedId)}/leaderboard.json?api_key=${encodeURIComponent(apiKey)}`,
+      `${baseUrl}/${accessLevel}/${version}/${language}/tournaments/${encodeURIComponent(mappedId)}/summary.json?api_key=${encodeURIComponent(apiKey)}`
+    );
+  }
+
+  const dedupedUrls = Array.from(new Set(urls.filter(Boolean)));
+  const headers = {
+    "accept": "application/json",
+    "x-api-key": apiKey,
+    "Authorization": `Bearer ${apiKey}`,
+  };
+
+  for (const url of dedupedUrls) {
+    try {
+      const resp = await fetch(url, { headers, timeout: 12000 });
+      if (!resp.ok) continue;
+      const json = await resp.json();
+      const players = extractPlayersFromPayload(json);
+      if (players.length) {
+        return { players, provider: "Sportradar", url, urlsTried: dedupedUrls };
+      }
+    } catch {}
+  }
+
+  return { players: [], provider: "Sportradar", urlsTried: dedupedUrls };
+}
+
 async function importFieldPlayersIntoTournament(tournamentId, players) {
   const uniqueByName = new Map();
   for (const p of players) {
@@ -423,6 +482,19 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
       : await resolveTheSportsDbEventId(tournamentId, supabase);
 
     let players = [];
+    let source = "unknown";
+    let importedEventId = null;
+
+    // 1) Sportradar first (if configured)
+    if (!players.length) {
+      const sr = await fetchSportradarFieldPlayers(tournament);
+      if (sr.players?.length) {
+        players = sr.players;
+        source = "Sportradar";
+      }
+    }
+
+    // 2) TheSportsDB
     if (eventId) {
       const tsdbKey = process.env.THE_SPORTS_DB_KEY || "3";
       const base = `https://www.thesportsdb.com/api/v1/json/${tsdbKey}`;
@@ -440,20 +512,25 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
           players.push(...extractPlayersFromPayload(json));
         } catch {}
       }
+      if (players.length) {
+        source = source === "unknown" ? "TheSportsDB" : `${source}+TheSportsDB`;
+        importedEventId = String(eventId);
+      }
     }
 
-    // TheSportsDB often has no field list for future events; fall back to RapidAPI provider.
+    // 3) RapidAPI fallback
     if (!players.length) {
       const rapid = await fetchRapidApiFieldPlayers(tournament);
       if (rapid.players?.length) {
         players = rapid.players;
+        source = "RapidAPI";
       }
     }
 
     players = players.filter((p) => p.name);
     if (!players.length) {
       return res.status(404).json({
-        error: "No player list found from TheSportsDB or RapidAPI for this tournament yet.",
+        error: "No player list found from Sportradar, TheSportsDB, or RapidAPI for this tournament yet.",
       });
     }
 
@@ -463,8 +540,8 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
     return res.json({
       imported: result.imported || 0,
       tournament_id: tournamentId,
-      source: eventId ? "TheSportsDB/RapidAPI" : "RapidAPI",
-      event_id: eventId ? String(eventId) : null,
+      source,
+      event_id: importedEventId,
       message: "Auto-imported tournament field.",
     });
   } catch (e) {

@@ -54,6 +54,18 @@ RAPIDAPI_GOLF_BASE_URL=https://live-golf-data.p.rapidapi.com
 # Optional: set if your chosen provider uses a different endpoint shape
 # Placeholders available: {id} {tsdb_event_id} {name} {start_date} {year}
 RAPIDAPI_GOLF_FIELD_URL_TEMPLATE=
+
+# Sportradar (optional, preferred if you have access)
+SPORTRADAR_API_KEY=your-sportradar-key
+SPORTRADAR_GOLF_BASE_URL=https://api.sportradar.com/golf
+SPORTRADAR_ACCESS_LEVEL=trial
+SPORTRADAR_GOLF_VERSION=v3
+SPORTRADAR_LANG=en
+# Map internal ids (t1, t4, etc.) to Sportradar tournament ids
+SPORTRADAR_TOURNAMENT_MAP={}
+# Optional custom field URL template:
+# placeholders: {id} {sportradar_tournament_id} {api_key} {access_level} {version} {language}
+SPORTRADAR_GOLF_FIELD_URL_TEMPLATE=
 ```
 
 3. Start website (frontend + backend):
@@ -87,7 +99,7 @@ VITE_SITE_URL=https://golfpoolpro.vercel.app
   - `GET /api/courses/tournament/:id`
 - Admin field import endpoint:
   - `POST /api/admin/import-field/:tournamentId` with `x-admin-token`
-  - `POST /api/admin/import-field-auto/:tournamentId` (auto from TheSportsDB, fallback to RapidAPI golf provider)
+  - `POST /api/admin/import-field-auto/:tournamentId` (provider chain: Sportradar -> TheSportsDB -> RapidAPI)
   - Body supports either:
     - JSON: `{"players":[{"name":"Scottie Scheffler","country":"USA","world_rank":1}]}`
     - CSV text: `{"csv":"name,country,world_rank\nScottie Scheffler,USA,1"}`
