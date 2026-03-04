@@ -1062,9 +1062,15 @@ export default function GolfPoolPro() {
   );
 
   const activePoolMemberIds = activePool ? (poolMembers[activePool.id] || []) : [];
-  const joinedParticipants = activePool
-    ? participants.filter(p=>activePoolMemberIds.includes(p.id))
-    : participants.filter(p=>p.joined);
+  const joinedParticipants = (() => {
+    if (!activePool) return participants.filter(p=>p.joined);
+    const members = participants.filter(p=>activePoolMemberIds.some((id)=>String(id)===String(p.id)));
+    if (members.length) return members;
+    const fallbackUserId = apiSession.get()?.id || currentUser;
+    if (!fallbackUserId) return [];
+    const me = participants.find((p)=>String(p.id)===String(fallbackUserId));
+    return me ? [me] : [];
+  })();
 
   // Get picks for active pool (or current draft)
   const activePicks = activePool ? (allDrafted[activePool.id]||[]) : drafted;
@@ -1117,7 +1123,7 @@ export default function GolfPoolPro() {
 
   const makePick = async (golferId,auto=false) => {
     if(!draftActive||draftDone) return;
-    if (!auto && effectiveUserId && currentParticipant?.id && currentParticipant.id !== effectiveUserId) {
+    if (!auto && effectiveUserId && currentParticipant?.id && String(currentParticipant.id) !== String(effectiveUserId)) {
       notify("It's not your turn to pick.", "error");
       return;
     }
@@ -1291,7 +1297,7 @@ export default function GolfPoolPro() {
     // Add user to pool members
     setPoolMembers(m=>{
       const existing = m[pool.id]||[];
-      if(existing.includes(userId)) return m;
+      if(existing.some((id)=>String(id)===String(userId))) return m;
       const updated = {...m, [pool.id]:[...existing, userId]};
       LS.set("mgpp_members", updated);
       return updated;
@@ -1751,7 +1757,7 @@ export default function GolfPoolPro() {
                 </div>
               )}
               {/* Delete button — host only */}
-              {activePool.hostId === (effectiveUserId||1) && (
+              {String(activePool.hostId||"") === String(effectiveUserId||1) && (
                 confirmDelete ? (
                   <div style={{display:"flex",alignItems:"center",gap:8,background:"rgba(220,38,38,.15)",border:"1px solid rgba(220,38,38,.4)",borderRadius:10,padding:"8px 12px"}}>
                     <span style={{fontSize:12,color:"#FCA5A5",fontWeight:600}}>Delete this pool?</span>
@@ -1814,7 +1820,7 @@ export default function GolfPoolPro() {
                                 {isReady?"✓ Ready":"Waiting…"}
                               </p>
                             </div>
-                            {!isReady && p.id === effectiveUserId && (
+                            {!isReady && String(p.id) === String(effectiveUserId) && (
                               <button className="btn-ready" onClick={async ()=>{
                                 const uid = apiSession.get()?.id || currentUser;
                                 if (apiToken.get() && activePool?.id && uid === p.id) {
@@ -1829,7 +1835,7 @@ export default function GolfPoolPro() {
                                 Ready
                               </button>
                             )}
-                            {!isReady && p.id !== effectiveUserId && (
+                            {!isReady && String(p.id) !== String(effectiveUserId) && (
                               <span style={{fontSize:11,color:"var(--muted)"}}>Waiting</span>
                             )}
                             {isReady && <span style={{fontSize:20}}>✅</span>}
@@ -1995,7 +2001,7 @@ export default function GolfPoolPro() {
                       </div>
                       <div style={{flex:1,overflowY:"auto",padding:"0 10px 10px"}}>
                         {filteredField.filter(g=>!drafted.find(d=>d.golferId===g.id)).map(g=>{
-                          const isMyTurn=draftActive&&!draftDone&&(!effectiveUserId||currentParticipant?.id===effectiveUserId);
+                          const isMyTurn=draftActive&&!draftDone&&(!effectiveUserId||String(currentParticipant?.id)===String(effectiveUserId));
                           return (
                             <div key={g.id} className="pick-row"
                               onClick={()=>isMyTurn&&makePick(g.id)}>
@@ -2266,7 +2272,7 @@ export default function GolfPoolPro() {
                       <div>
                         {(()=>{
                           // "Your team" = first participant (James) or current user's team
-                          const myParticipant = joinedParticipants.find(p=>p.id===effectiveUserId) || joinedParticipants[0];
+                          const myParticipant = joinedParticipants.find(p=>String(p.id)===String(effectiveUserId)) || joinedParticipants[0];
                           const myTeam = getPoolTeam(myParticipant.id);
                           const myRank = poolStandings.findIndex(p=>p.id===myParticipant.id)+1;
                           const myScore = getPoolScore(myParticipant.id);
@@ -2850,6 +2856,16 @@ export default function GolfPoolPro() {
                           created: bp.created_at ? new Date(bp.created_at).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"}),
                         };
                         setPools((p)=>[...p.filter(x=>x.id!==newPool.id), newPool]);
+                        const creatorId = getEffectiveUserId();
+                        if (creatorId) {
+                          setPoolMembers((m)=>({ ...m, [newPool.id]: [creatorId] }));
+                          ensureParticipant({
+                            id: creatorId,
+                            name: getEffectiveUserName(),
+                            email: getEffectiveUserEmail(),
+                            avatar: getEffectiveUserAvatar(),
+                          });
+                        }
                         setActivePool(newPool);
                         setPoolPhase("lobby");
                         setPoolReadyMap({});
@@ -2878,6 +2894,14 @@ export default function GolfPoolPro() {
                       created: new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"})
                     };
                     setPools(p=>[...p,newPool]);
+                    const creatorId = getEffectiveUserId()||1;
+                    setPoolMembers((m)=>({ ...m, [newPool.id]: [creatorId] }));
+                    ensureParticipant({
+                      id: creatorId,
+                      name: getEffectiveUserName(),
+                      email: getEffectiveUserEmail(),
+                      avatar: getEffectiveUserAvatar(),
+                    });
                     setActivePool(newPool);
                     setPoolPhase("lobby");
                     setPoolReadyMap({});
