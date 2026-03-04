@@ -504,6 +504,50 @@ const fmtTDate = (isoDate) => {
 
 const makeInviteToken = () => Math.random().toString(36).slice(2, 10);
 
+const encodeInviteData = (pool) => {
+  try {
+    const payload = {
+      id: pool?.id || null,
+      name: pool?.name || "Pool Invite",
+      invite_token: pool?.invite_token || pool?.inviteToken || null,
+      tournamentId: pool?.tournamentId || pool?.tournament_id || "",
+      tournamentName: pool?.tournamentName || "",
+      status: pool?.status || "lobby",
+      participants: Number(pool?.participants || pool?.current_members || 0),
+      maxParticipants: Number(pool?.maxParticipants || pool?.max_participants || 8),
+      teamSize: Number(pool?.teamSize || pool?.team_size || 4),
+      scoringGolfers: Number(pool?.scoringGolfers || pool?.scoring_golfers || 2),
+      shotClock: Number(pool?.shotClock || pool?.shot_clock || 60),
+      cutLine: Number(pool?.cutLine || pool?.cut_line || 2),
+      hostId: pool?.hostId || pool?.host_id || null,
+    };
+    return btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+  } catch {
+    return "";
+  }
+};
+
+const decodeInviteData = (encoded) => {
+  if (!encoded) return null;
+  try {
+    const json = decodeURIComponent(escape(atob(encoded)));
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+};
+
+const parseInviteDataFromLocation = () => {
+  if (typeof window === "undefined") return null;
+  const hash = window.location.hash || "";
+  const hashQuery = hash.includes("?") ? hash.split("?")[1] : "";
+  const fromHash = new URLSearchParams(hashQuery).get("d");
+  if (fromHash) return decodeInviteData(fromHash);
+  const fromSearch = new URLSearchParams(window.location.search || "").get("d");
+  if (fromSearch) return decodeInviteData(fromSearch);
+  return null;
+};
+
 const parseInviteTokenFromLocation = () => {
   if (typeof window === "undefined") return null;
   const hash = window.location.hash || "";
@@ -664,6 +708,7 @@ export default function GolfPoolPro() {
     let cancelled = false;
     const handleInviteRoute = async () => {
       const token = parseInviteTokenFromLocation();
+      const payload = parseInviteDataFromLocation();
       if (!token) return;
 
       const localPool = pools.find(
@@ -674,6 +719,16 @@ export default function GolfPoolPro() {
       );
       if (localPool) {
         openInvite(localPool);
+        return;
+      }
+
+      if (payload && (payload.invite_token === token || payload.id === token || !payload.invite_token)) {
+        openInvite({
+          ...payload,
+          invite_token: payload.invite_token || token,
+          inviteToken: payload.invite_token || token,
+          id: payload.id || `inv_${token}`,
+        });
         return;
       }
 
@@ -698,8 +753,22 @@ export default function GolfPoolPro() {
         openInvite(mappedPool);
       } catch {
         if (!cancelled) {
-          openInvite(null);
-          notify("This invite link may have expired or the pool was deleted.", "error");
+          // Fallback to token-only invite flow so login/signup/join can still proceed.
+          openInvite({
+            id: `inv_${token}`,
+            name: "Pool Invite",
+            invite_token: token,
+            inviteToken: token,
+            status: "lobby",
+            participants: 0,
+            maxParticipants: 8,
+            teamSize: 4,
+            scoringGolfers: 2,
+            cutLine: 2,
+            shotClock: 60,
+            tournamentName: "",
+            tournamentId: "",
+          });
         }
       }
     };
@@ -1012,7 +1081,9 @@ export default function GolfPoolPro() {
   const buildInviteUrl = (pool) => {
     const token = pool?.invite_token || pool?.inviteToken || pool?.id;
     if (!token) return `${SITE_BASE}/`;
-    return `${SITE_BASE}/#/join/${encodeURIComponent(token)}`;
+    const encoded = encodeInviteData(pool);
+    const suffix = encoded ? `?d=${encodeURIComponent(encoded)}` : "";
+    return `${SITE_BASE}/#/join/${encodeURIComponent(token)}${suffix}`;
   };
   const createFlowInviteUrl = buildInviteUrl({ invite_token: pendingInviteToken });
 
