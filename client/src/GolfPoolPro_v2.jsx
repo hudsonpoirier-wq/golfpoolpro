@@ -647,12 +647,13 @@ export default function GolfPoolPro() {
   const [inviteView,setInviteView] = useState(false);
   const [invitePool,setInvitePool] = useState(null);
   const [authMode,setAuthMode] = useState("login"); // "login"|"signup"|"forgot"|"join"
-  const [authEmail,setAuthEmail] = useState("");
+  const [authEmail,setAuthEmail] = useState(()=> LS.get("mgpp_last_email","") || "");
   const [authPass,setAuthPass] = useState("");
   const [authName,setAuthName] = useState("");
   const [authError,setAuthError] = useState("");
   const [authSuccess,setAuthSuccess] = useState("");
   const [forgotSent,setForgotSent] = useState(false);
+  const [authBusy,setAuthBusy] = useState(false);
 
   // Config for new pool creation
   const [config,setConfig] = useState({
@@ -686,6 +687,7 @@ export default function GolfPoolPro() {
   useEffect(()=>{ LS.set("mgpp_picks", allDrafted); },[allDrafted]);
   useEffect(()=>{ LS.set("mgpp_members", poolMembers); },[poolMembers]);
   useEffect(()=>{ LS.set("mgpp_participants", participants); },[participants]);
+  useEffect(()=>{ LS.set("mgpp_last_email", authEmail || ""); },[authEmail]);
 
   // One-time cleanup to remove legacy demo data from older localStorage sessions.
   useEffect(()=>{
@@ -1308,7 +1310,7 @@ export default function GolfPoolPro() {
     setInvitePool(pool);
     setInviteView(true);
     setAuthMode((apiToken.get() && (apiSession.get()?.id || currentUser)) ? "join" : "login");
-    setAuthEmail(""); setAuthPass(""); setAuthName(""); setAuthError(""); setAuthSuccess("");
+    setAuthName(""); setAuthError(""); setAuthSuccess("");
     setForgotSent(false);
     setView("invite");
   };
@@ -1364,16 +1366,19 @@ export default function GolfPoolPro() {
   };
 
   const handleLogin = async () => {
+    if (authBusy) return;
     const email = authEmail.trim().toLowerCase();
     const pass = authPass;
     if (!email || !pass) { setAuthError("Email and password are required."); return; }
 
+    setAuthBusy(true);
     try {
       const resp = await Auth.login({ email, password: pass });
       const user = resp?.user;
       if (!user?.id) throw new Error("Invalid login response");
       setCurrentUser(user.id);
       LS.set("mgpp_session", user.id);
+      setAuthEmail(email);
       ensureParticipant({ id:user.id, name:user.name || email.split("@")[0], email:user.email || email, avatar:user.avatar || (user.name||"U").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase() });
       setAuthError("");
       if(invitePool){
@@ -1387,23 +1392,31 @@ export default function GolfPoolPro() {
       }
       return;
     } catch (e) {
-      setAuthError(e?.message || "Login failed. Please check your email/password.");
+      const msg = String(e?.message || "");
+      if (/rate limit/i.test(msg)) setAuthError("Too many auth attempts. Wait a few minutes, then try again.");
+      else if (/email not confirmed/i.test(msg)) setAuthError("Please verify your email first, then log in.");
+      else setAuthError(msg || "Login failed. Please check your email/password.");
+    } finally {
+      setAuthBusy(false);
     }
   };
 
   const handleSignup = async () => {
+    if (authBusy) return;
     if(!authName.trim()||!authEmail.trim()||!authPass){ setAuthError("Please fill all fields."); return; }
     if(authPass.length<6){ setAuthError("Password must be at least 6 characters."); return; }
     const name = authName.trim();
     const email = authEmail.trim().toLowerCase();
     const pass = authPass;
 
+    setAuthBusy(true);
     try {
       const resp = await Auth.signup({ name, email, password: pass });
       const user = resp?.user;
       if (!user?.id) throw new Error("Invalid signup response");
       setCurrentUser(user.id);
       LS.set("mgpp_session", user.id);
+      setAuthEmail(email);
       ensureParticipant({ id:user.id, name:user.name || name, email:user.email || email, avatar:user.avatar || name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase() });
       setAuthError("");
       if(invitePool){
@@ -1417,17 +1430,31 @@ export default function GolfPoolPro() {
       }
       return;
     } catch (e) {
-      setAuthError(e?.message || "Signup failed. Please try again.");
+      const msg = String(e?.message || "");
+      if (/rate limit/i.test(msg)) setAuthError("Too many signup emails sent. Wait a few minutes and try again.");
+      else setAuthError(msg || "Signup failed. Please try again.");
+    } finally {
+      setAuthBusy(false);
     }
   };
 
-  const handleForgotPassword = () => {
-    if(!authEmail){ setAuthError("Enter your email above first."); return; }
-    const acct = accounts.find(a=>a.email.toLowerCase()===authEmail.toLowerCase());
-    // Always show success (don't reveal if email exists)
-    setForgotSent(true);
-    setAuthError("");
-    notify("Password reset email sent!");
+  const handleForgotPassword = async () => {
+    if (authBusy) return;
+    const email = authEmail.trim().toLowerCase();
+    if(!email){ setAuthError("Enter your email above first."); return; }
+    setAuthBusy(true);
+    try {
+      await Auth.forgotPassword(email);
+      setForgotSent(true);
+      setAuthError("");
+      notify("Password reset email sent!");
+    } catch (e) {
+      const msg = String(e?.message || "");
+      if (/rate limit/i.test(msg)) setAuthError("Reset email rate limit reached. Wait a few minutes and try again.");
+      else setAuthError(msg || "Could not send reset email. Please try again.");
+    } finally {
+      setAuthBusy(false);
+    }
   };
 
   const handleLogout = async () => {
@@ -1438,8 +1465,6 @@ export default function GolfPoolPro() {
     setInvitePool(null);
     setInviteView(false);
     setAuthMode("login");
-    setAuthEmail("");
-    setAuthPass("");
     setAuthName("");
     setAuthError("");
     setAuthSuccess("");
@@ -1830,7 +1855,7 @@ export default function GolfPoolPro() {
                             {!isReady && String(p.id) === String(effectiveUserId) && (
                               <button className="btn-ready" onClick={async ()=>{
                                 const uid = apiSession.get()?.id || currentUser;
-                                if (apiToken.get() && activePool?.id && uid === p.id) {
+                                if (apiToken.get() && activePool?.id && String(uid) === String(p.id)) {
                                   try {
                                     await Pools.setReady(activePool.id, true);
                                     setPoolReadyMap(m=>({...m,[p.id]:true}));
@@ -2999,15 +3024,15 @@ export default function GolfPoolPro() {
                 <div>
                   <div className="fgrp">
                     <label className="label">Email Address</label>
-                    <input className="inp" type="email" placeholder="you@example.com" value={authEmail} onChange={e=>{setAuthEmail(e.target.value);setAuthError("");}}/>
+                    <input className="inp" type="email" name="email" autoComplete="email" placeholder="you@example.com" value={authEmail} onChange={e=>{setAuthEmail(e.target.value);setAuthError("");}}/>
                   </div>
                   <div className="fgrp">
                     <label className="label">Password</label>
-                    <input className="inp" type="password" placeholder="Your password" value={authPass} onChange={e=>{setAuthPass(e.target.value);setAuthError("");}}/>
+                    <input className="inp" type="password" name="password" autoComplete="current-password" placeholder="Your password" value={authPass} onChange={e=>{setAuthPass(e.target.value);setAuthError("");}}/>
                   </div>
                   {authError && <p style={{color:"var(--red)",fontSize:13,marginBottom:12,fontWeight:600}}>{authError}</p>}
-                  <button className="btn btn-gold" style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginBottom:14}} onClick={handleLogin}>
-                    Log In
+                  <button className="btn btn-gold" style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginBottom:14}} onClick={handleLogin} disabled={authBusy}>
+                    {authBusy ? "Logging In..." : "Log In"}
                   </button>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                     <button className="btn-link" style={{fontSize:13}} onClick={()=>{setAuthMode("forgot");setAuthError("");setForgotSent(false);}}>
@@ -3026,19 +3051,19 @@ export default function GolfPoolPro() {
                 <div>
                   <div className="fgrp">
                     <label className="label">Full Name</label>
-                    <input className="inp" placeholder="Your full name" value={authName} onChange={e=>{setAuthName(e.target.value);setAuthError("");}}/>
+                    <input className="inp" name="name" autoComplete="name" placeholder="Your full name" value={authName} onChange={e=>{setAuthName(e.target.value);setAuthError("");}}/>
                   </div>
                   <div className="fgrp">
                     <label className="label">Email Address</label>
-                    <input className="inp" type="email" placeholder="you@example.com" value={authEmail} onChange={e=>{setAuthEmail(e.target.value);setAuthError("");}}/>
+                    <input className="inp" type="email" name="email" autoComplete="email" placeholder="you@example.com" value={authEmail} onChange={e=>{setAuthEmail(e.target.value);setAuthError("");}}/>
                   </div>
                   <div className="fgrp">
                     <label className="label">Create Password</label>
-                    <input className="inp" type="password" placeholder="Min. 6 characters" value={authPass} onChange={e=>{setAuthPass(e.target.value);setAuthError("");}}/>
+                    <input className="inp" type="password" name="new-password" autoComplete="new-password" placeholder="Min. 6 characters" value={authPass} onChange={e=>{setAuthPass(e.target.value);setAuthError("");}}/>
                   </div>
                   {authError && <p style={{color:"var(--red)",fontSize:13,marginBottom:12,fontWeight:600}}>{authError}</p>}
-                  <button className="btn btn-gold" style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginBottom:12}} onClick={handleSignup}>
-                    Create Account
+                  <button className="btn btn-gold" style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginBottom:12}} onClick={handleSignup} disabled={authBusy}>
+                    {authBusy ? "Creating Account..." : "Create Account"}
                   </button>
                   <p style={{fontSize:11,color:"var(--muted)",textAlign:"center",lineHeight:1.5}}>
                     By creating an account you agree to our Terms of Service and Privacy Policy.
@@ -3058,7 +3083,7 @@ export default function GolfPoolPro() {
                   <p className="sub" style={{marginBottom:20,fontSize:13}}>Enter your email address and we'll send you a link to reset your password.</p>
                   <div className="fgrp">
                     <label className="label">Email Address</label>
-                    <input className="inp" type="email" placeholder="you@example.com" value={authEmail} onChange={e=>{setAuthEmail(e.target.value);setAuthError("");}}/>
+                    <input className="inp" type="email" name="email" autoComplete="email" placeholder="you@example.com" value={authEmail} onChange={e=>{setAuthEmail(e.target.value);setAuthError("");}}/>
                   </div>
                   {authError && <p style={{color:"var(--red)",fontSize:13,marginBottom:12,fontWeight:600}}>{authError}</p>}
                   {forgotSent ? (
@@ -3070,8 +3095,8 @@ export default function GolfPoolPro() {
                       </div>
                     </div>
                   ) : (
-                    <button className="btn btn-prim" style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginBottom:12}} onClick={handleForgotPassword}>
-                      Send Reset Link
+                    <button className="btn btn-prim" style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginBottom:12}} onClick={handleForgotPassword} disabled={authBusy}>
+                      {authBusy ? "Sending..." : "Send Reset Link"}
                     </button>
                   )}
                   <div style={{textAlign:"center"}}>

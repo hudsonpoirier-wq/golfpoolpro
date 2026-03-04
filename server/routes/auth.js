@@ -29,7 +29,11 @@ router.post("/signup", async (req, res, next) => {
         emailRedirectTo: `${process.env.SITE_URL}/verify-email`,
       },
     });
-    if (error) return res.status(400).json({ error: error.message });
+    if (error) {
+      const msg = String(error.message || "").toLowerCase();
+      const status = msg.includes("rate limit") ? 429 : 400;
+      return res.status(status).json({ error: error.message || "Signup failed." });
+    }
 
     res.status(201).json({
       user: { id: data.user.id, email: data.user.email, name: name.trim() },
@@ -52,7 +56,11 @@ router.post("/login", async (req, res, next) => {
       email: email.trim().toLowerCase(),
       password,
     });
-    if (error) return res.status(401).json({ error: "Invalid email or password." });
+    if (error) {
+      const msg = String(error.message || "").toLowerCase();
+      const status = msg.includes("rate limit") ? 429 : 401;
+      return res.status(status).json({ error: error.message || "Invalid email or password." });
+    }
 
     // Fetch profile
     const { data: profile } = await req.app.locals.supabase
@@ -91,7 +99,13 @@ router.post("/forgot-password", async (req, res, next) => {
       redirectTo: `${process.env.SITE_URL}/reset-password`,
     });
     res.json({ message: "If that email exists, a reset link has been sent." });
-  } catch (e) { next(e); }
+  } catch (e) {
+    const msg = String(e?.message || "").toLowerCase();
+    if (msg.includes("rate limit")) {
+      return res.status(429).json({ error: e.message || "Rate limit exceeded." });
+    }
+    next(e);
+  }
 });
 
 // ─── POST /api/auth/reset-password ───────────────────────────
