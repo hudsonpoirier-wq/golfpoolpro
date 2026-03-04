@@ -97,20 +97,25 @@ function registerCall() {
 function normalizeCourse(raw) {
   if (!raw || typeof raw !== "object") return null;
   const location = [
-    raw.city,
-    raw.state,
-    raw.country,
+    raw.city || raw.strCity || raw.town,
+    raw.state || raw.region || raw.strState,
+    raw.country || raw.strCountry,
   ].filter(Boolean).join(", ");
+  const id =
+    raw.id || raw.course_id || raw.slug || raw.uuid || raw._id || raw.idCourse || raw.courseId || null;
+  const name =
+    raw.name || raw.course_name || raw.strCourse || raw.title || raw.club_name || raw.strVenue || null;
+  if (!name) return null;
   return {
-    id: raw.id || raw.course_id || raw.slug || raw.uuid || null,
-    name: raw.name || raw.course_name || raw.strCourse || raw.title || "Unknown Course",
-    city: raw.city || null,
-    state: raw.state || null,
-    country: raw.country || null,
+    id,
+    name,
+    city: raw.city || raw.strCity || raw.town || null,
+    state: raw.state || raw.region || raw.strState || null,
+    country: raw.country || raw.strCountry || null,
     location: location || null,
-    par: raw.par || raw.total_par || null,
-    holes: raw.holes || raw.hole_count || null,
-    yardage: raw.yardage || raw.total_yardage || null,
+    par: raw.par || raw.total_par || raw.course_par || null,
+    holes: raw.holes || raw.hole_count || raw.total_holes || null,
+    yardage: raw.yardage || raw.total_yardage || raw.course_yardage || null,
     website: raw.website || raw.url || null,
     raw,
   };
@@ -120,11 +125,24 @@ function extractCourseList(payload) {
   const candidates = [
     payload?.courses,
     payload?.data,
+    payload?.data?.courses,
+    payload?.response,
+    payload?.items,
+    payload?.results?.courses,
     payload?.results,
     payload,
   ];
   for (const c of candidates) {
     if (Array.isArray(c)) return c.map(normalizeCourse).filter(Boolean);
+  }
+  // Last resort: scan object values for any arrays of course-like objects.
+  if (payload && typeof payload === "object") {
+    for (const value of Object.values(payload)) {
+      if (Array.isArray(value)) {
+        const parsed = value.map(normalizeCourse).filter(Boolean);
+        if (parsed.length) return parsed;
+      }
+    }
   }
   return [];
 }
