@@ -1350,24 +1350,8 @@ export default function GolfPoolPro() {
         setView("home");
       }
       return;
-    } catch {}
-
-    // Local fallback
-    const acct = accounts.find(a=>a.email.toLowerCase()===email&&a.password===pass);
-    if(!acct){ setAuthError("Invalid email or password."); return; }
-    ensureParticipant(acct);
-    setCurrentUser(acct.id);
-    LS.set("mgpp_session", acct.id);
-    if(invitePool){
-      setAuthError("");
-      setAuthSuccess(`Logged in as ${acct.name}. Review the pool details, then tap Join Pool.`);
-      setAuthMode("join");
-      notify(`Welcome back, ${acct.name.split(" ")[0]}!`);
-      setInviteView(true);
-      setView("invite");
-    } else {
-      notify(`Welcome back, ${acct.name.split(" ")[0]}!`);
-      setView("home");
+    } catch (e) {
+      setAuthError(e?.message || "Login failed. Please check your email/password.");
     }
   };
 
@@ -1396,30 +1380,8 @@ export default function GolfPoolPro() {
         setView("home");
       }
       return;
-    } catch {}
-
-    // Local fallback
-    const existing = accounts.find(a=>a.email.toLowerCase()===email);
-    if(existing){ setAuthError("An account with this email already exists. Please log in."); return; }
-    const newId = Math.max(...accounts.map(a=>a.id),5)+1;
-    const avatar = name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
-    const newAcct = {id:newId, name, email, password:pass, avatar};
-    const updated = [...accounts, newAcct];
-    setAccounts(updated);
-    ensureParticipant(newAcct);
-    LS.set("mgpp_accounts", updated);
-    setCurrentUser(newId);
-    LS.set("mgpp_session", newId);
-    if(invitePool){
-      setAuthError("");
-      setAuthSuccess(`Account created. Review the pool details, then tap Join Pool.`);
-      setAuthMode("join");
-      notify(`Welcome to MyGolfPoolPro, ${name.split(" ")[0]}!`);
-      setInviteView(true);
-      setView("invite");
-    } else {
-      notify(`Welcome to MyGolfPoolPro, ${name.split(" ")[0]}!`);
-      setView("home");
+    } catch (e) {
+      setAuthError(e?.message || "Signup failed. Please try again.");
     }
   };
 
@@ -1460,6 +1422,10 @@ export default function GolfPoolPro() {
     const userId = getEffectiveUserId();
     if (!userId || !invitePool) return;
     try {
+      if (!apiToken.get()) {
+        setAuthError("Please log in first to join this pool.");
+        return;
+      }
       // Try backend join when we have a real invite token/session; local-mode fallback below.
       const token = invitePool.invite_token || invitePool.inviteToken || null;
       let joinedPoolId = invitePool.id;
@@ -1467,46 +1433,37 @@ export default function GolfPoolPro() {
         try {
           const joined = await Invites.join(token);
           joinedPoolId = joined?.poolId || joinedPoolId;
-        } catch {}
+        } catch (e) {
+          throw e;
+        }
       }
-      if (apiToken.get() && joinedPoolId) {
-        try {
-          const details = await Pools.get(joinedPoolId);
-          const bp = details?.pool || {};
-          const mappedPool = {
-            id: bp.id || invitePool.id,
-            name: bp.name || invitePool.name,
-            status: bp.status || invitePool.status || "lobby",
-            tournamentId: bp.tournament_id || invitePool.tournamentId || "",
-            tournamentName: bp.tournament?.name || invitePool.tournamentName || "",
-            participants: (details?.members || []).length || invitePool.participants || 0,
-            maxParticipants: Number(bp.max_participants || invitePool.maxParticipants || 8),
-            teamSize: Number(bp.team_size || invitePool.teamSize || 4),
-            scoringGolfers: Number(bp.scoring_golfers || invitePool.scoringGolfers || 2),
-            cutLine: Number(bp.cut_line || invitePool.cutLine || 2),
-            shotClock: Number(bp.shot_clock || invitePool.shotClock || 60),
-            invite_token: bp.invite_token || token || invitePool.invite_token,
-            hostId: bp.host_id || invitePool.hostId || null,
-          };
-          joinPool(userId, mappedPool);
-          setActivePool(mappedPool);
-          setPoolPhase(mappedPool.status==="live"?"live":mappedPool.status==="draft"?"draft":"lobby");
-          setView("pool");
-          setAuthSuccess("");
-          clearHash();
-          notify(`Joined ${mappedPool.name}!`);
-          return;
-        } catch {}
-      }
-      joinPool(userId, invitePool);
-      setActivePool(invitePool);
-      setPoolPhase(invitePool.status==="live"?"live":invitePool.status==="complete"?"live":"lobby");
+      if (!joinedPoolId) throw new Error("Unable to resolve pool ID from invite.");
+      const details = await Pools.get(joinedPoolId);
+      const bp = details?.pool || {};
+      const mappedPool = {
+        id: bp.id || invitePool.id,
+        name: bp.name || invitePool.name,
+        status: bp.status || invitePool.status || "lobby",
+        tournamentId: bp.tournament_id || invitePool.tournamentId || "",
+        tournamentName: bp.tournament?.name || invitePool.tournamentName || "",
+        participants: (details?.members || []).length || invitePool.participants || 0,
+        maxParticipants: Number(bp.max_participants || invitePool.maxParticipants || 8),
+        teamSize: Number(bp.team_size || invitePool.teamSize || 4),
+        scoringGolfers: Number(bp.scoring_golfers || invitePool.scoringGolfers || 2),
+        cutLine: Number(bp.cut_line || invitePool.cutLine || 2),
+        shotClock: Number(bp.shot_clock || invitePool.shotClock || 60),
+        invite_token: bp.invite_token || token || invitePool.invite_token,
+        hostId: bp.host_id || invitePool.hostId || null,
+      };
+      joinPool(userId, mappedPool);
+      setActivePool(mappedPool);
+      setPoolPhase(mappedPool.status==="live"?"live":mappedPool.status==="draft"?"draft":"lobby");
+      setView("pool");
       setAuthSuccess("");
       clearHash();
-      setView("pool");
-      notify(`Joined ${invitePool.name}!`);
-    } catch {
-      setAuthError("Could not join this pool right now. Please try again.");
+      notify(`Joined ${mappedPool.name}!`);
+    } catch (e) {
+      setAuthError(e?.message || "Could not join this pool right now. Please try again.");
     }
   };
 
@@ -1843,7 +1800,7 @@ export default function GolfPoolPro() {
                         );
                       })}
                     </div>
-                    {!allReady && (
+                    {!allReady && String(activePool.hostId||"") === String(effectiveUserId||"") && (
                       <button className="btn btn-ghost btn-sm" style={{marginTop:8}} onClick={()=>{
                         const allMap = {};
                         joinedParticipants.forEach(p=>{ allMap[p.id]=true; });
@@ -2824,91 +2781,61 @@ export default function GolfPoolPro() {
                       notify("Select a tournament first.", "error");
                       return;
                     }
-                    // Prefer backend pool creation for multi-user shared lobbies.
-                    if (apiToken.get()) {
-                      try {
-                        const resp = await Pools.create({
-                          name: config.poolName,
-                          tournament_id: config.tournament,
-                          max_participants: config.maxParticipants,
-                          team_size: config.teamSize,
-                          scoring_golfers: config.scoringGolfers,
-                          cut_line: config.cutLine,
-                          shot_clock: config.shotClock,
-                        });
-                        const bp = resp?.pool || {};
-                        const newPool = {
-                          id: bp.id,
-                          name: bp.name || config.poolName,
-                          tournamentId: bp.tournament_id || config.tournament,
-                          status: bp.status || "lobby",
-                          participants: 1,
-                          maxParticipants: Number(bp.max_participants || config.maxParticipants),
-                          teamSize: Number(bp.team_size || config.teamSize),
-                          scoringGolfers: Number(bp.scoring_golfers || config.scoringGolfers),
-                          cutLine: Number(bp.cut_line || config.cutLine),
-                          shotClock: Number(bp.shot_clock || config.shotClock),
-                          draftOrderType: config.draftOrderType,
-                          invite_token: bp.invite_token || pendingInviteToken,
-                          yourRank: null,
-                          yourScore: null,
-                          hostId: bp.host_id || getEffectiveUserId(),
-                          created: bp.created_at ? new Date(bp.created_at).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"}),
-                        };
-                        setPools((p)=>[...p.filter(x=>x.id!==newPool.id), newPool]);
-                        const creatorId = getEffectiveUserId();
-                        if (creatorId) {
-                          setPoolMembers((m)=>({ ...m, [newPool.id]: [creatorId] }));
-                          ensureParticipant({
-                            id: creatorId,
-                            name: getEffectiveUserName(),
-                            email: getEffectiveUserEmail(),
-                            avatar: getEffectiveUserAvatar(),
-                          });
-                        }
-                        setActivePool(newPool);
-                        setPoolPhase("lobby");
-                        setPoolReadyMap({});
-                        setConfirmDelete(false);
-                        setView("pool");
-                        setPendingInviteToken(makeInviteToken());
-                        notify("Pool created! Share the invite link to get people in.");
-                        return;
-                      } catch {}
+                    if (!apiToken.get()) {
+                      notify("Please log in before creating a shared pool.", "error");
+                      return;
                     }
-                    const newPool = {
-                      id:`p${Date.now()}`,
-                      name:config.poolName,
-                      tournamentId:config.tournament,
-                      status:"lobby",
-                      participants:0,
-                      maxParticipants:config.maxParticipants,
-                      teamSize:config.teamSize,
-                      scoringGolfers:config.scoringGolfers,
-                      cutLine:config.cutLine,
-                      shotClock:config.shotClock,
-                      draftOrderType:config.draftOrderType,
-                      invite_token: pendingInviteToken,
-                      yourRank:null,yourScore:null,
-                      hostId: getEffectiveUserId()||1,
-                      created: new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"})
-                    };
-                    setPools(p=>[...p,newPool]);
-                    const creatorId = getEffectiveUserId()||1;
-                    setPoolMembers((m)=>({ ...m, [newPool.id]: [creatorId] }));
-                    ensureParticipant({
-                      id: creatorId,
-                      name: getEffectiveUserName(),
-                      email: getEffectiveUserEmail(),
-                      avatar: getEffectiveUserAvatar(),
-                    });
-                    setActivePool(newPool);
-                    setPoolPhase("lobby");
-                    setPoolReadyMap({});
-                    setConfirmDelete(false);
-                    setView("pool");
-                    setPendingInviteToken(makeInviteToken());
-                    notify("Pool created! Share the invite link to get people in.");
+                    // Prefer backend pool creation for multi-user shared lobbies.
+                    try {
+                      const resp = await Pools.create({
+                        name: config.poolName,
+                        tournament_id: config.tournament,
+                        max_participants: config.maxParticipants,
+                        team_size: config.teamSize,
+                        scoring_golfers: config.scoringGolfers,
+                        cut_line: config.cutLine,
+                        shot_clock: config.shotClock,
+                      });
+                      const bp = resp?.pool || {};
+                      const newPool = {
+                        id: bp.id,
+                        name: bp.name || config.poolName,
+                        tournamentId: bp.tournament_id || config.tournament,
+                        status: bp.status || "lobby",
+                        participants: 1,
+                        maxParticipants: Number(bp.max_participants || config.maxParticipants),
+                        teamSize: Number(bp.team_size || config.teamSize),
+                        scoringGolfers: Number(bp.scoring_golfers || config.scoringGolfers),
+                        cutLine: Number(bp.cut_line || config.cutLine),
+                        shotClock: Number(bp.shot_clock || config.shotClock),
+                        draftOrderType: config.draftOrderType,
+                        invite_token: bp.invite_token || pendingInviteToken,
+                        yourRank: null,
+                        yourScore: null,
+                        hostId: bp.host_id || getEffectiveUserId(),
+                        created: bp.created_at ? new Date(bp.created_at).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"}),
+                      };
+                      setPools((p)=>[...p.filter(x=>x.id!==newPool.id), newPool]);
+                      const creatorId = getEffectiveUserId();
+                      if (creatorId) {
+                        setPoolMembers((m)=>({ ...m, [newPool.id]: [creatorId] }));
+                        ensureParticipant({
+                          id: creatorId,
+                          name: getEffectiveUserName(),
+                          email: getEffectiveUserEmail(),
+                          avatar: getEffectiveUserAvatar(),
+                        });
+                      }
+                      setActivePool(newPool);
+                      setPoolPhase("lobby");
+                      setPoolReadyMap({});
+                      setConfirmDelete(false);
+                      setView("pool");
+                      setPendingInviteToken(makeInviteToken());
+                      notify("Pool created! Share the invite link to get people in.");
+                    } catch (e) {
+                      notify(e?.message || "Could not create pool. Please try again.", "error");
+                    }
                   }}>
                     💾 Save & Create Pool
                   </button>
