@@ -61,7 +61,8 @@ app.use(express.urlencoded({ extended: true }));
 // Rate limiting
 app.use("/api/auth", rateLimit({
   windowMs: 15 * 60 * 1000,   // 15 minutes
-  max: 20,
+  max: 60,
+  skipSuccessfulRequests: true,
   message: { error: "Too many attempts. Please try again in 15 minutes." }
 }));
 app.use("/api", rateLimit({

@@ -24,12 +24,20 @@ const REQUEST_TIMEOUT_MS = Number(env.VITE_API_TIMEOUT_MS || env.REACT_APP_API_T
 
 // ─── Auth token management ────────────────────────────────────
 const tokenKey = "mgpp_token";
+const refreshKey = "mgpp_refresh";
 const sessionKey = "mgpp_user";
 
 export const token = {
   get: () => localStorage.getItem(tokenKey),
+  getRefresh: () => localStorage.getItem(refreshKey),
   set: (t) => localStorage.setItem(tokenKey, t),
-  clear: () => { localStorage.removeItem(tokenKey); localStorage.removeItem(sessionKey); },
+  setRefresh: (rt) => localStorage.setItem(refreshKey, rt),
+  clearAccess: () => localStorage.removeItem(tokenKey),
+  clear: () => {
+    localStorage.removeItem(tokenKey);
+    localStorage.removeItem(refreshKey);
+    localStorage.removeItem(sessionKey);
+  },
 };
 
 export const session = {
@@ -56,7 +64,8 @@ async function api(method, path, body = null, authed = true) {
     if (!resp.ok) {
       const err = new Error(data.error || `Request failed (${resp.status})`);
       err.status = resp.status;
-      if (resp.status === 401 && authed) token.clear();
+      // Preserve refresh token so the app can recover session via /api/auth/refresh.
+      if (resp.status === 401 && authed) token.clearAccess();
       throw err;
     }
     return data;
@@ -93,6 +102,7 @@ export const Auth = {
     const data = await post("/api/auth/signup", { name, email, password }, false);
     if (data.session?.access_token) {
       token.set(data.session.access_token);
+      if (data.session?.refresh_token) token.setRefresh(data.session.refresh_token);
       session.set(data.user);
     }
     return data;
@@ -103,8 +113,22 @@ export const Auth = {
     const data = await post("/api/auth/login", { email, password }, false);
     if (data.session?.access_token) {
       token.set(data.session.access_token);
+      if (data.session?.refresh_token) token.setRefresh(data.session.refresh_token);
       session.set(data.user);
     }
+    return data;
+  },
+
+  /** Refresh an expired session using refresh token */
+  refresh: async () => {
+    const refreshToken = token.getRefresh();
+    if (!refreshToken) throw new Error("No refresh token available.");
+    const data = await post("/api/auth/refresh", { refreshToken }, false);
+    if (data.session?.access_token) {
+      token.set(data.session.access_token);
+      if (data.session?.refresh_token) token.setRefresh(data.session.refresh_token);
+    }
+    if (data.user) session.set(data.user);
     return data;
   },
 
@@ -116,7 +140,11 @@ export const Auth = {
 
   /** Send password reset email */
   forgotPassword: (email) =>
-    post("/api/auth/forgot-password", { email }, false),
+    // Use configured site URL when available, else fall back to current browser origin.
+    post("/api/auth/forgot-password", {
+      email,
+      redirectTo: `${env.VITE_SITE_URL || env.REACT_APP_SITE_URL || (typeof window !== "undefined" ? window.location.origin : "http://localhost:5173")}/reset-password`,
+    }, false),
 
   /** Reset password (called after user clicks email link — token already set) */
   resetPassword: (password) =>

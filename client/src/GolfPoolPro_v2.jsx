@@ -939,7 +939,22 @@ export default function GolfPoolPro() {
     let cancelled = false;
     const hydrate = async () => {
       try {
-        const resp = await Auth.me();
+        let resp;
+        try {
+          resp = await Auth.me();
+        } catch (e) {
+          const status = Number(e?.status || 0);
+          if (status === 401) {
+            try {
+              await Auth.refresh();
+              resp = await Auth.me();
+            } catch {
+              throw e;
+            }
+          } else {
+            throw e;
+          }
+        }
         const u = resp?.user;
         if (cancelled || !u?.id) return;
         apiSession.set(u);
@@ -952,11 +967,10 @@ export default function GolfPoolPro() {
           avatar: u.avatar || (u.name || "U").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase(),
         });
       } catch {
-        if (!cancelled) {
-          try { apiToken.clear(); } catch {}
-          setCurrentUser(null);
-          setAuthMode("login");
-        }
+        if (cancelled) return;
+        try { apiToken.clear(); } catch {}
+        setCurrentUser(null);
+        setAuthMode("login");
       }
     };
     hydrate();

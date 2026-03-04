@@ -10,6 +10,13 @@ const supabaseAuth = () => createClient(
   process.env.SUPABASE_ANON_KEY
 );
 
+function pickStatusFromSupabaseMessage(message, fallback = 400) {
+  const msg = String(message || "").toLowerCase();
+  if (msg.includes("rate limit")) return 429;
+  if (msg.includes("invalid login") || msg.includes("invalid")) return 401;
+  return fallback;
+}
+
 // ─── POST /api/auth/signup ────────────────────────────────────
 // Body: { name, email, password }
 router.post("/signup", async (req, res, next) => {
@@ -95,7 +102,7 @@ router.post("/login", async (req, res, next) => {
       .from("profiles")
       .select("name, avatar")
       .eq("id", data.user.id)
-      .single();
+      .maybeSingle();
 
     res.json({
       user: { id: data.user.id, email: data.user.email, ...profile },
@@ -114,6 +121,38 @@ router.post("/logout", requireAuth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// ─── POST /api/auth/refresh ───────────────────────────────────
+// Body: { refreshToken }
+router.post("/refresh", async (req, res, next) => {
+  try {
+    const refreshToken = String(req.body?.refreshToken || "").trim();
+    if (!refreshToken) return res.status(400).json({ error: "refreshToken is required." });
+
+    const sb = supabaseAuth();
+    const { data, error } = await sb.auth.refreshSession({ refresh_token: refreshToken });
+    if (error || !data?.session || !data?.user) {
+      const status = pickStatusFromSupabaseMessage(error?.message, 401);
+      return res.status(status).json({ error: error?.message || "Could not refresh session." });
+    }
+
+    const { data: profile } = await req.app.locals.supabase
+      .from("profiles")
+      .select("name, avatar")
+      .eq("id", data.user.id)
+      .maybeSingle();
+
+    return res.json({
+      user: {
+        id: data.user.id,
+        email: data.user.email,
+        name: profile?.name || data.user.user_metadata?.name || data.user.email?.split("@")[0] || "User",
+        avatar: profile?.avatar || null,
+      },
+      session: data.session,
+    });
+  } catch (e) { next(e); }
+});
+
 // ─── POST /api/auth/forgot-password ──────────────────────────
 // Body: { email }
 router.post("/forgot-password", async (req, res, next) => {
@@ -122,10 +161,15 @@ router.post("/forgot-password", async (req, res, next) => {
     if (!email) return res.status(400).json({ error: "Email is required." });
 
     const sb = supabaseAuth();
+    const redirectTo = req.body?.redirectTo || `${process.env.SITE_URL}/reset-password`;
     // Always return 200 — don't reveal if email exists
-    await sb.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
-      redirectTo: `${process.env.SITE_URL}/reset-password`,
+    const { error } = await sb.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
+      redirectTo,
     });
+    if (error) {
+      const status = pickStatusFromSupabaseMessage(error.message, 400);
+      return res.status(status).json({ error: error.message || "Could not send reset email." });
+    }
     res.json({ message: "If that email exists, a reset link has been sent." });
   } catch (e) {
     const msg = String(e?.message || "").toLowerCase();
@@ -144,9 +188,9 @@ router.post("/reset-password", requireAuth, async (req, res, next) => {
     if (!password || password.length < 6)
       return res.status(400).json({ error: "Password must be at least 6 characters." });
 
-    const sb = supabaseAuth();
-    const { error } = await sb.auth.updateUser({ password });
-    if (error) return res.status(400).json({ error: error.message });
+    const admin = req.app.locals.supabase;
+    const { error } = await admin.auth.admin.updateUserById(req.user.id, { password });
+    if (error) return res.status(400).json({ error: error.message || "Could not update password." });
 
     res.json({ message: "Password updated successfully." });
   } catch (e) { next(e); }
@@ -159,9 +203,20 @@ router.get("/me", requireAuth, async (req, res, next) => {
       .from("profiles")
       .select("id, name, avatar, email, created_at")
       .eq("id", req.user.id)
-      .single();
-    if (error || !profile) return res.status(404).json({ error: "Profile not found." });
-    res.json({ user: profile });
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message || "Could not load profile." });
+    if (!profile) {
+      return res.json({
+        user: {
+          id: req.user.id,
+          name: req.user.email?.split("@")[0] || "User",
+          avatar: null,
+          email: req.user.email || "",
+          created_at: null,
+        },
+      });
+    }
+    return res.json({ user: profile });
   } catch (e) { next(e); }
 });
 
