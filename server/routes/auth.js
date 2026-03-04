@@ -20,25 +20,53 @@ router.post("/signup", async (req, res, next) => {
     if (password.length < 6)
       return res.status(400).json({ error: "Password must be at least 6 characters." });
 
-    const sb = supabaseAuth();
-    const { data, error } = await sb.auth.signUp({
-      email: email.trim().toLowerCase(),
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanName = name.trim();
+    const admin = req.app.locals.supabase; // service-role client
+    const sb = supabaseAuth(); // anon client for session creation
+
+    // Create + auto-confirm so users can log in immediately (no email verification gate).
+    const { data: created, error: createErr } = await admin.auth.admin.createUser({
+      email: cleanEmail,
       password,
-      options: {
-        data: { name: name.trim() },
-        emailRedirectTo: `${process.env.SITE_URL}/verify-email`,
-      },
+      email_confirm: true,
+      user_metadata: { name: cleanName },
     });
-    if (error) {
-      const msg = String(error.message || "").toLowerCase();
+    if (createErr) {
+      const msg = String(createErr.message || "").toLowerCase();
       const status = msg.includes("rate limit") ? 429 : 400;
-      return res.status(status).json({ error: error.message || "Signup failed." });
+      return res.status(status).json({ error: createErr.message || "Signup failed." });
     }
 
+    // Return a live session right away.
+    const { data: signInData, error: signInErr } = await sb.auth.signInWithPassword({
+      email: cleanEmail,
+      password,
+    });
+    if (signInErr) {
+      return res.status(201).json({
+        user: { id: created.user.id, email: created.user.email, name: cleanName },
+        session: null,
+        message: "Account created. Please log in.",
+      });
+    }
+
+    // Profile row is created by trigger, but query as best-effort for name/avatar.
+    const { data: profile } = await admin
+      .from("profiles")
+      .select("name, avatar")
+      .eq("id", created.user.id)
+      .single();
+
     res.status(201).json({
-      user: { id: data.user.id, email: data.user.email, name: name.trim() },
-      session: data.session,
-      message: "Account created! Check your email to verify your address.",
+      user: {
+        id: created.user.id,
+        email: created.user.email,
+        name: profile?.name || cleanName,
+        avatar: profile?.avatar || null,
+      },
+      session: signInData.session,
+      message: "Account created.",
     });
   } catch (e) { next(e); }
 });

@@ -1394,7 +1394,7 @@ export default function GolfPoolPro() {
     } catch (e) {
       const msg = String(e?.message || "");
       if (/rate limit/i.test(msg)) setAuthError("Too many auth attempts. Wait a few minutes, then try again.");
-      else if (/email not confirmed/i.test(msg)) setAuthError("Please verify your email first, then log in.");
+      else if (/email not confirmed/i.test(msg)) setAuthError("Account setup is still completing. Try again in a few seconds.");
       else setAuthError(msg || "Login failed. Please check your email/password.");
     } finally {
       setAuthBusy(false);
@@ -2857,6 +2857,15 @@ export default function GolfPoolPro() {
                       return;
                     }
                     if (!apiToken.get()) {
+                      notify("Session expired. Please log in again before creating a shared pool.", "error");
+                      setView("invite");
+                      setInviteView(true);
+                      setAuthMode("login");
+                      return;
+                    }
+                    try {
+                      await Auth.me();
+                    } catch {
                       notify("Session expired. Please log in again before creating a shared pool.", "error");
                       setView("invite");
                       setInviteView(true);
