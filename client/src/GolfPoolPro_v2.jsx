@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { Golfers } from "./api";
 import {
   AreaChart, Area, LineChart, Line, BarChart, Bar,
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
@@ -465,13 +466,7 @@ const SEED_POOLS = [
 ];
 
 // Seed accounts — stored in localStorage under "mgpp_accounts"
-const SEED_ACCOUNTS = [
-  {id:1, name:"James Hartwell", email:"james@example.com", password:"golf123", avatar:"JH"},
-  {id:2, name:"Sarah Chen",     email:"sarah@example.com", password:"golf123", avatar:"SC"},
-  {id:3, name:"Mike Torres",    email:"mike@example.com",  password:"golf123", avatar:"MT"},
-  {id:4, name:"Emma Walsh",     email:"emma@example.com",  password:"golf123", avatar:"EW"},
-  {id:5, name:"David Park",     email:"david@example.com", password:"golf123", avatar:"DP"},
-];
+const SEED_ACCOUNTS = [];
 
 // localStorage helpers
 const LS = {
@@ -482,13 +477,17 @@ const LS = {
 const initAccounts = () => {
   const saved = LS.get("mgpp_accounts");
   if(!saved) { LS.set("mgpp_accounts", SEED_ACCOUNTS); return SEED_ACCOUNTS; }
-  // Merge seed accounts for demo users that might be missing
-  const merged = [...saved];
-  SEED_ACCOUNTS.forEach(seed => {
-    if(!merged.find(a=>a.id===seed.id)) merged.push(seed);
-  });
-  LS.set("mgpp_accounts", merged);
-  return merged;
+  return saved;
+};
+
+const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+const DEMO_EMAILS = new Set(["james@example.com","sarah@example.com","mike@example.com","emma@example.com","david@example.com"]);
+
+const fmtTDate = (isoDate) => {
+  if(!isoDate) return "TBD";
+  const d = new Date(isoDate);
+  if(Number.isNaN(d.getTime())) return "TBD";
+  return d.toLocaleDateString(undefined, {month:"short", day:"numeric", year:"numeric"});
 };
 
 /* ─── HELPERS ─── */
@@ -547,9 +546,11 @@ export default function GolfPoolPro() {
   const [analyticsTab,setAnalyticsTab] = useState("leaderboard");
   const [statsTab,setStatsTab] = useState("overview");
   const [statsPlayer,setStatsPlayer] = useState(null);
-  const [pools,setPools] = useState(()=> LS.get("mgpp_pools", SEED_POOLS));
+  const [pools,setPools] = useState(()=> LS.get("mgpp_pools", []));
   const [currentUser,setCurrentUser] = useState(()=> LS.get("mgpp_session", null));
   const [accounts,setAccounts] = useState(()=> initAccounts());
+  const [tournaments,setTournaments] = useState([]);
+  const [apiGolfers,setApiGolfers] = useState([]);
   const [notification,setNotification] = useState(null);
   const [showTournamentInfo,setShowTournamentInfo] = useState(false);
   const [poolTab,setPoolTab] = useState("leaderboard");
@@ -569,9 +570,9 @@ export default function GolfPoolPro() {
   const [poolPhase,setPoolPhase] = useState("lobby"); // "lobby"|"draft"|"live"
   const [poolReadyMap,setPoolReadyMap] = useState({});
   // Pool-specific draft picks: {poolId: [{golferId, participantId, pickNum}]}
-  const [allDrafted,setAllDrafted] = useState(()=> LS.get("mgpp_picks", POOL_DRAFT_PICKS));
+  const [allDrafted,setAllDrafted] = useState(()=> LS.get("mgpp_picks", {}));
   // Pool memberships: {poolId: [userId,...]}
-  const [poolMembers,setPoolMembers] = useState(()=> LS.get("mgpp_members", {p1:[1,2,3,4,5],p2:[1],p3:[1,2,3,4,5]}));
+  const [poolMembers,setPoolMembers] = useState(()=> LS.get("mgpp_members", {}));
 
   // Invite / auth state
   const [inviteView,setInviteView] = useState(false);
@@ -591,7 +592,7 @@ export default function GolfPoolPro() {
   });
   const [randomizedOrder,setRandomizedOrder] = useState([]);
 
-  const [participants,setParticipants] = useState(PARTICIPANTS_SEED.map((p,i)=>({...p,joined:i<5})));
+  const [participants,setParticipants] = useState(()=> LS.get("mgpp_participants", []));
   const [drafted,setDrafted] = useState([]);
   const [currentPick,setCurrentPick] = useState(0);
   const [timer,setTimer] = useState(60);
@@ -603,15 +604,33 @@ export default function GolfPoolPro() {
   const [filterPos,setFilterPos] = useState("all");
 
   // Live scores state — updates every 5 minutes (matches GitHub Actions cron)
-  const [liveScores,setLiveScores] = useState(BASE_LIVE_SCORES);
+  const [liveScores,setLiveScores] = useState([]);
   const [lastUpdated,setLastUpdated] = useState(new Date());
-  const [countdown,setCountdown] = useState(300);
+  const [countdown,setCountdown] = useState(30);
 
   // ── Persist critical state to localStorage ──
   useEffect(()=>{ LS.set("mgpp_pools", pools); },[pools]);
   useEffect(()=>{ LS.set("mgpp_session", currentUser); },[currentUser]);
   useEffect(()=>{ LS.set("mgpp_picks", allDrafted); },[allDrafted]);
   useEffect(()=>{ LS.set("mgpp_members", poolMembers); },[poolMembers]);
+  useEffect(()=>{ LS.set("mgpp_participants", participants); },[participants]);
+
+  // One-time cleanup to remove legacy demo data from older localStorage sessions.
+  useEffect(()=>{
+    setAccounts(a=>a.filter(x=>!DEMO_EMAILS.has((x.email||"").toLowerCase())));
+    setParticipants(p=>p.filter(x=>!DEMO_EMAILS.has((x.email||"").toLowerCase())));
+    setPools(p=>p.filter(x=>!["p1","p2","p3"].includes(x.id)));
+    setPoolMembers(m=>{
+      const copy = {...m};
+      delete copy.p1; delete copy.p2; delete copy.p3;
+      return copy;
+    });
+    setAllDrafted(d=>{
+      const copy = {...d};
+      delete copy.p1; delete copy.p2; delete copy.p3;
+      return copy;
+    });
+  },[]);
 
   // ── Handle invite links via URL hash e.g. #/join/p1 ──
   useEffect(()=>{
@@ -640,22 +659,78 @@ export default function GolfPoolPro() {
   };
 
   useEffect(()=>{
-    // Countdown ticker — syncs every 5 minutes to match GitHub Actions cron
-    const tick = setInterval(()=>{
-      setCountdown(c => {
-        if(c<=1){
-          setLiveScores(prev => prev.map(s => {
-            const delta = Math.random()>.85 ? (Math.random()>.5?-1:1) : 0;
-            return {...s, R4: s.R4 + delta};
-          }));
-          setLastUpdated(new Date());
-          return 300;
-        }
-        return c-1;
-      });
-    },1000);
-    return ()=>clearInterval(tick);
+    const loadTournaments = async () => {
+      try {
+        const resp = await fetch(`${API_BASE}/api/tournaments/future`);
+        const data = await resp.json();
+        const mapped = (data.tournaments||[]).map(t=>({
+          id: t.id,
+          name: t.name,
+          venue: t.venue || "TBD",
+          date: fmtTDate(t.start_date || t.startDate),
+          purse: t.purse ? `$${Number(t.purse).toLocaleString()}` : "TBD",
+          field: t.field_size || t.field || 156
+        }));
+        setTournaments(mapped);
+      } catch {
+        setTournaments([]);
+      }
+    };
+    loadTournaments();
   },[]);
+
+  const selectedTournamentId = activePool?.tournamentId || config.tournamentId || config.tournament || "";
+
+  useEffect(()=>{
+    if(!selectedTournamentId){
+      setApiGolfers([]);
+      setLiveScores([]);
+      setCountdown(30);
+      return;
+    }
+
+    const pull = async () => {
+      try {
+        const [{ golfers }, { scores }] = await Promise.all([
+          Golfers.list(selectedTournamentId),
+          Golfers.scores(selectedTournamentId),
+        ]);
+
+        setApiGolfers((golfers||[]).map(g=>({
+          id: g.id,
+          name: g.name,
+          country: g.country || "🌍",
+          rank: g.world_rank || 999,
+          avg: Number(g.scoring_avg || 0),
+          cut: 0,
+          sg: Number(g.sg_total || 0),
+          drivDist: g.driv_dist || 0,
+          drivAcc: Number(g.driv_acc || 0),
+          gir: Number(g.gir || 0),
+          putts: Number(g.putts || 0),
+        })));
+
+        setLiveScores((scores||[]).map(s=>({
+          gId: s.golfer?.id || s.golfer_id,
+          R1: s.r1 ?? 0,
+          R2: s.r2 ?? 0,
+          R3: s.r3 ?? 0,
+          R4: s.r4 ?? 0,
+          pos: s.position ?? 999,
+          birdies: s.birdies || [0,0,0,0],
+          eagles: s.eagles || [0,0,0,0],
+          bogeys: s.bogeys || [0,0,0,0],
+        })));
+        setLastUpdated(new Date());
+      } catch {}
+    };
+
+    pull();
+    setCountdown(30);
+    const iv = setInterval(()=>setCountdown(c => c<=1 ? 30 : c-1), 1000);
+    const refresh = setInterval(pull, 30000);
+    return ()=>{ clearInterval(iv); clearInterval(refresh); };
+  },[selectedTournamentId]);
 
   // Require login for all non-invite screens.
   useEffect(()=>{
@@ -667,15 +742,22 @@ export default function GolfPoolPro() {
       setAuthMode("login");
       setAuthError("");
     }
-  },[currentUser, view]);
+    if(currentUser && !accounts.find(a=>a.id===currentUser)){
+      setCurrentUser(null);
+      setView("invite");
+      setAuthMode("login");
+    }
+  },[currentUser, view, accounts]);
 
   // Active pool config
   const poolConfig = activePool || config;
+  const golferCatalog = apiGolfers;
   const poolTournamentField = (() => {
-    const t = TOURNAMENTS.find(x=>x.id===poolConfig.tournamentId||x.id===poolConfig.tournament);
-    if(!t) return FULL_FIELD;
-    return FULL_FIELD.filter(p=>p.rank<=Math.min(t.field,FULL_FIELD.length));
+    const t = tournaments.find(x=>x.id===poolConfig.tournamentId||x.id===poolConfig.tournament);
+    if(!t) return golferCatalog;
+    return golferCatalog.filter(p=>p.rank<=Math.min(t.field,golferCatalog.length));
   })();
+  const findGolferById = (id) => poolTournamentField.find(x=>x.id===id) || apiGolfers.find(x=>x.id===id) || FULL_FIELD.find(x=>x.id===id);
 
   const filteredField = poolTournamentField.filter(g =>
     g.name.toLowerCase().includes(search.toLowerCase())
@@ -839,9 +921,25 @@ export default function GolfPoolPro() {
     setPools(ps=>ps.map(p=>p.id===pool.id?{...p,participants:Math.max(p.participants,(poolMembers[pool.id]||[]).length+1)}:p));
   };
 
+  const ensureParticipant = (acct) => {
+    if(!acct) return;
+    setParticipants(ps=>{
+      if(ps.find(p=>p.id===acct.id)) return ps;
+      return [...ps, {
+        id: acct.id,
+        name: acct.name,
+        avatar: acct.avatar || acct.name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase(),
+        email: acct.email,
+        token: `inv_${acct.id}_user`,
+        joined: true
+      }];
+    });
+  };
+
   const handleLogin = () => {
     const acct = accounts.find(a=>a.email.toLowerCase()===authEmail.toLowerCase()&&a.password===authPass);
     if(!acct){ setAuthError("Invalid email or password."); return; }
+    ensureParticipant(acct);
     setCurrentUser(acct.id);
     LS.set("mgpp_session", acct.id);
     clearHash();
@@ -867,6 +965,7 @@ export default function GolfPoolPro() {
     const newAcct = {id:newId, name:authName.trim(), email:authEmail.trim().toLowerCase(), password:authPass, avatar};
     const updated = [...accounts, newAcct];
     setAccounts(updated);
+    ensureParticipant(newAcct);
     LS.set("mgpp_accounts", updated);
     setCurrentUser(newId);
     LS.set("mgpp_session", newId);
@@ -977,8 +1076,8 @@ export default function GolfPoolPro() {
             </div>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               <div className="nav-user">
-                <Avatar init={currentUser ? participants.find(p=>p.id===currentUser)?.avatar||"AD" : "AD"} size={24} color="var(--gold)"/>
-                <span>{currentUser ? participants.find(p=>p.id===currentUser)?.name?.split(" ")[0]||"Admin" : "Admin"}</span>
+                <Avatar init={currentUser ? (accounts.find(a=>a.id===currentUser)?.avatar||"AD") : "AD"} size={24} color="var(--gold)"/>
+                <span>{currentUser ? (accounts.find(a=>a.id===currentUser)?.name||"Account").split(" ")[0] : "Guest"}</span>
               </div>
               <button onClick={()=>{setShowSettings(s=>!s);setPasswordMsg("");setNewPassword("");setConfirmPassword("");}}
                 style={{padding:"5px 12px",borderRadius:20,border:`1px solid ${showSettings?"rgba(200,169,79,.5)":"rgba(255,255,255,.18)"}`,background:showSettings?"rgba(200,169,79,.15)":"rgba(255,255,255,.06)",color:showSettings?"var(--gold)":"rgba(255,255,255,.55)",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",transition:"all .15s"}}>
@@ -1068,7 +1167,7 @@ export default function GolfPoolPro() {
               </div>
               <div className="g3" style={{marginBottom:40}}>
                 {pools.map(pool=>{
-                  const t = TOURNAMENTS.find(x=>x.id===pool.tournamentId);
+                  const t = tournaments.find(x=>x.id===pool.tournamentId);
                   return (
                     <div key={pool.id} className={`pool-card ${pool.status}`} onClick={()=>openPool(pool)}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
@@ -1153,7 +1252,7 @@ export default function GolfPoolPro() {
                     {poolPhase==="draft"?"Drafting":activePool.status.charAt(0).toUpperCase()+activePool.status.slice(1)}
                   </span>
                 </div>
-                <p style={{fontSize:12,color:"rgba(255,255,255,.6)",marginTop:2}}>{TOURNAMENTS.find(t=>t.id===activePool.tournamentId)?.name}</p>
+                <p style={{fontSize:12,color:"rgba(255,255,255,.6)",marginTop:2}}>{tournaments.find(t=>t.id===activePool.tournamentId)?.name}</p>
               </div>
               {(activePool.status==="live"||poolPhase==="live") && (
                 <div className="update-bar" style={{background:"rgba(255,255,255,.1)",color:"rgba(255,255,255,.7)",margin:0}}>
@@ -1247,7 +1346,7 @@ export default function GolfPoolPro() {
                     <h3 className="h3" style={{marginBottom:14}}>Pool Settings</h3>
                     <div className="card" style={{marginBottom:16}}>
                       {[
-                        {l:"Tournament",v:TOURNAMENTS.find(t=>t.id===activePool.tournamentId)?.name||"—",i:"⛳"},
+                        {l:"Tournament",v:tournaments.find(t=>t.id===activePool.tournamentId)?.name||"—",i:"⛳"},
                         {l:"Field Size",v:`${poolTournamentField.length} players`,i:"👤"},
                         {l:"Draft Format",v:`Snake · ${activePool.teamSize} rounds`,i:"🔄"},
                         {l:"Scoring",v:`Best ${activePool.scoringGolfers} of ${activePool.teamSize}`,i:"🎯"},
@@ -1529,7 +1628,7 @@ export default function GolfPoolPro() {
                       .map(s=>({...s,tot:s.R1+s.R2+s.R3+s.R4}))
                       .sort((a,b)=>a.tot-b.tot)
                       .map((s,idx)=>{
-                        const g=FULL_FIELD.find(x=>x.id===s.gId);
+                        const g=findGolferById(s.gId);
                         if(!g) return null;
                         const isInPool = draftedGolferIds.has(g.id);
                         const pos = idx+1;
@@ -2123,11 +2222,11 @@ export default function GolfPoolPro() {
                     <label className="label">Tournament</label>
                     <select className="inp" value={config.tournament} onChange={e=>setConfig(c=>({...c,tournament:e.target.value}))}>
                       <option value="">— Select Future Tournament —</option>
-                      {TOURNAMENTS.map(t=><option key={t.id} value={t.id}>{t.name} · {t.date}</option>)}
+                      {tournaments.map(t=><option key={t.id} value={t.id}>{t.name} · {t.date}</option>)}
                     </select>
                   </div>
                   {config.tournament && (()=>{
-                    const t=TOURNAMENTS.find(x=>x.id===config.tournament);
+                    const t=tournaments.find(x=>x.id===config.tournament);
                     return (
                       <div style={{background:"rgba(27,67,50,.05)",borderRadius:10,padding:"11px 14px",marginBottom:16,border:"1px solid rgba(27,67,50,.08)"}}>
                         <p style={{fontSize:13,fontWeight:600,color:"var(--forest)",marginBottom:3}}>{t.name}</p>
@@ -2188,7 +2287,7 @@ export default function GolfPoolPro() {
                     </div>
                   </div>
                   <div style={{background:"var(--cream-2)",borderRadius:10,padding:"14px 16px",marginBottom:16}}>
-                    {[["Tournament",TOURNAMENTS.find(t=>t.id===config.tournament)?.name||"Not selected"],
+                    {[["Tournament",tournaments.find(t=>t.id===config.tournament)?.name||"Not selected"],
                       ["Total Picks",`${config.maxParticipants*config.teamSize}`],
                       ["Scoring",`Best ${config.scoringGolfers} of ${config.teamSize}`],
                       ["Draft Order",config.draftOrderType==="random"?"🎲 Random":"🔢 Ordered"],
@@ -2310,7 +2409,7 @@ export default function GolfPoolPro() {
                   <div style={{background:"var(--forest)",borderRadius:12,padding:"16px 20px",color:"#fff",marginBottom:0}}>
                     <p style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"1px",color:"rgba(255,255,255,.55)",marginBottom:4}}>You've been invited to</p>
                     <p style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:700}}>{invitePool.name}</p>
-                    <p style={{fontSize:12,color:"rgba(255,255,255,.6)",marginTop:2}}>{TOURNAMENTS.find(t=>t.id===invitePool.tournamentId)?.name}</p>
+                    <p style={{fontSize:12,color:"rgba(255,255,255,.6)",marginTop:2}}>{tournaments.find(t=>t.id===invitePool.tournamentId)?.name}</p>
                   </div>
                 )}
                 {!invitePool && (
@@ -2348,10 +2447,6 @@ export default function GolfPoolPro() {
                         Back to Home
                       </button>
                     )}
-                  </div>
-                  <div style={{marginTop:20,padding:"12px 16px",background:"var(--cream-2)",borderRadius:9}}>
-                    <p style={{fontSize:11,fontWeight:700,color:"var(--forest)",marginBottom:4}}>Demo credentials:</p>
-                    <p style={{fontSize:12,color:"var(--muted)"}}>james@example.com / golf123</p>
                   </div>
                 </div>
               )}
@@ -2466,7 +2561,7 @@ export default function GolfPoolPro() {
                   <span>Pos</span><span>Player</span><span style={{textAlign:"right"}}>R1</span><span style={{textAlign:"right"}}>R2</span><span style={{textAlign:"right"}}>R3</span><span style={{textAlign:"right"}}>R4</span><span style={{textAlign:"right"}}>Total</span>
                 </div>
                 {liveScores.map(s=>{
-                  const g=FULL_FIELD.find(x=>x.id===s.gId);
+                  const g=findGolferById(s.gId);
                   if(!g) return null;
                   const tot=s.R1+s.R2+s.R3+s.R4;
                   return (
@@ -2493,7 +2588,7 @@ export default function GolfPoolPro() {
                     data={["R1","R2","R3","R4"].map((r,ri)=>({
                       round:r,
                       ...liveScores.slice(0,6).reduce((acc,s)=>{
-                        const g=FULL_FIELD.find(x=>x.id===s.gId);
+                        const g=findGolferById(s.gId);
                         if(!g) return acc;
                         acc[g.name.split(" ").pop()]=[s.R1,s.R2,s.R3,s.R4].slice(0,ri+1).reduce((a,b)=>a+b,0);
                         return acc;
@@ -2626,7 +2721,7 @@ export default function GolfPoolPro() {
                       <span>Pos</span><span>Player</span><span style={{textAlign:"right"}}>R1</span><span style={{textAlign:"right"}}>R2</span><span style={{textAlign:"right"}}>R3</span><span style={{textAlign:"right"}}>R4</span><span style={{textAlign:"right"}}>Total</span>
                     </div>
                     {liveScores.map(s=>{
-                      const g=FULL_FIELD.find(x=>x.id===s.gId);
+                      const g=findGolferById(s.gId);
                       if(!g) return null;
                       const tot=s.R1+s.R2+s.R3+s.R4;
                       return (
@@ -2708,7 +2803,7 @@ export default function GolfPoolPro() {
                     <p className="sub" style={{marginBottom:16}}>Eagles / Birdies / Pars / Bogeys across all rounds</p>
                     <ResponsiveContainer width="100%" height={240}>
                       <BarChart data={liveScores.slice(0,8).map(s=>{
-                        const g=FULL_FIELD.find(x=>x.id===s.gId);
+                        const g=findGolferById(s.gId);
                         const totalB=s.birdies.reduce((a,b)=>a+b,0);
                         const totalE=s.eagles.reduce((a,b)=>a+b,0);
                         const totalBog=s.bogeys.reduce((a,b)=>a+b,0);
@@ -2756,14 +2851,14 @@ export default function GolfPoolPro() {
                       <h3 className="h3">Round {ri+1}</h3>
                       <div style={{display:"flex",gap:8}}>
                         {liveScores.slice(0,3).map(s=>{
-                          const g=FULL_FIELD.find(x=>x.id===s.gId);
+                          const g=findGolferById(s.gId);
                           return <span key={s.gId} className="badge bg-forest">{g?.name.split(" ").pop()}: {fmtScore(s[r])}</span>;
                         })}
                       </div>
                     </div>
                     <ResponsiveContainer width="100%" height={200}>
                       <BarChart data={liveScores.slice(0,10).map(s=>{
-                        const g=FULL_FIELD.find(x=>x.id===s.gId);
+                        const g=findGolferById(s.gId);
                         return {name:g?.name.split(" ").pop(),score:s[r],birdies:s.birdies[ri],bogeys:s.bogeys[ri]};
                       })} margin={{top:0,right:10,bottom:0,left:0}}>
                         <CartesianGrid stroke="var(--cream-2)" vertical={false}/>
@@ -2790,7 +2885,7 @@ export default function GolfPoolPro() {
                   <span>#</span><span>Player</span><span style={{textAlign:"right"}}>Avg</span><span style={{textAlign:"right"}}>Drive</span><span style={{textAlign:"right"}}>GIR%</span><span style={{textAlign:"right"}}>SG</span><span style={{textAlign:"right"}}>Total</span>
                 </div>
                 {liveScores.map(s=>{
-                  const g=FULL_FIELD.find(x=>x.id===s.gId);
+                  const g=findGolferById(s.gId);
                   if(!g) return null;
                   const tot=s.R1+s.R2+s.R3+s.R4;
                   return (
@@ -2816,7 +2911,7 @@ export default function GolfPoolPro() {
               <div>
                 <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:18}}>
                   {liveScores.map(s=>{
-                    const g=FULL_FIELD.find(x=>x.id===s.gId);
+                    const g=findGolferById(s.gId);
                     if(!g) return null;
                     return (
                       <button key={g.id} className={`btn btn-sm ${statsPlayer?.id===g.id?"btn-prim":"btn-ghost"}`}
@@ -2927,7 +3022,7 @@ export default function GolfPoolPro() {
                   <p className="sub" style={{marginBottom:18}}>Total score comparison across all 4 rounds</p>
                   <ResponsiveContainer width="100%" height={280}>
                     <BarChart data={liveScores.slice(0,6).map(s=>{
-                      const g=FULL_FIELD.find(x=>x.id===s.gId);
+                      const g=findGolferById(s.gId);
                       return {name:g?.name.split(" ").pop(),R1:s.R1,R2:s.R2,R3:s.R3,R4:s.R4};
                     })} margin={{top:0,right:10,bottom:0,left:0}}>
                       <CartesianGrid stroke="var(--cream-2)" vertical={false}/>
@@ -2946,7 +3041,7 @@ export default function GolfPoolPro() {
                   <h3 className="h3" style={{marginBottom:4}}>Driving Stats Comparison</h3>
                   <p className="sub" style={{marginBottom:18}}>Distance vs Accuracy for field players</p>
                   <ResponsiveContainer width="100%" height={260}>
-                    <BarChart data={FULL_FIELD.slice(0,12).map(g=>({name:g.name.split(" ").pop(),distance:g.drivDist,accuracy:g.drivAcc,gir:g.gir}))}
+                    <BarChart data={poolTournamentField.slice(0,12).map(g=>({name:g.name.split(" ").pop(),distance:g.drivDist,accuracy:g.drivAcc,gir:g.gir}))}
                       margin={{top:0,right:10,bottom:0,left:0}}>
                       <CartesianGrid stroke="var(--cream-2)" vertical={false}/>
                       <XAxis dataKey="name" tick={{fontSize:10,fill:"#78716C"}} axisLine={false} tickLine={false}/>

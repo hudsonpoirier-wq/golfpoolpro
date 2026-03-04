@@ -23,7 +23,8 @@ const golferRoutes  = require("./routes/golfers");
 const scoreRoutes   = require("./routes/scores");
 const inviteRoutes  = require("./routes/invites");
 const draftRoutes   = require("./routes/draft");
-const { syncLiveScores } = require("./services/scoresSync");
+const tournamentRoutes = require("./routes/tournaments");
+const { syncLiveScores, seedGolfers } = require("./services/scoresSync");
 
 const app = express();
 
@@ -63,9 +64,25 @@ app.use("/api/golfers", golferRoutes);
 app.use("/api/scores",  scoreRoutes);
 app.use("/api/invite",  inviteRoutes);
 app.use("/api/draft",   draftRoutes);
+app.use("/api/tournaments", tournamentRoutes);
 
 // Health check
 app.get("/api/health", (_req, res) => res.json({ status: "ok", ts: new Date().toISOString() }));
+
+// Admin seed endpoint for loading golfers from SportsDataIO.
+app.post("/api/admin/seed-golfers", async (req, res, next) => {
+  try {
+    const required = process.env.ADMIN_TOKEN;
+    if (required && req.headers["x-admin-token"] !== required) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    const result = await seedGolfers(supabase);
+    if (result?.error) return res.status(400).json({ error: result.error });
+    return res.json(result);
+  } catch (e) {
+    return next(e);
+  }
+});
 
 // ─── Global error handler ─────────────────────────────────────
 app.use((err, _req, res, _next) => {
