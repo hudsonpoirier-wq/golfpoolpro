@@ -558,6 +558,22 @@ const parseInviteTokenFromLocation = () => {
   return null;
 };
 
+const parseRecoveryTokensFromLocation = () => {
+  if (typeof window === "undefined") return null;
+  const readParams = (raw) => {
+    const params = new URLSearchParams(raw || "");
+    const type = params.get("type");
+    const accessToken = params.get("access_token");
+    const refreshToken = params.get("refresh_token");
+    if (type === "recovery" && accessToken) return { accessToken, refreshToken };
+    return null;
+  };
+  const hashRaw = (window.location.hash || "").replace(/^#/, "");
+  const fromHash = readParams(hashRaw);
+  if (fromHash) return fromHash;
+  return readParams(window.location.search || "");
+};
+
 /* ─── HELPERS ─── */
 const fmtScore = (s) => {
   if(s===null||s===undefined) return <span style={{color:"#CBD5E1"}}>—</span>;
@@ -655,6 +671,8 @@ export default function GolfPoolPro() {
   const [forgotSent,setForgotSent] = useState(false);
   const [authBusy,setAuthBusy] = useState(false);
   const [readyBusyMap,setReadyBusyMap] = useState({});
+  const [resetPass,setResetPass] = useState("");
+  const [resetPassConfirm,setResetPassConfirm] = useState("");
 
   // Config for new pool creation
   const [config,setConfig] = useState({
@@ -680,7 +698,7 @@ export default function GolfPoolPro() {
   const [lastUpdated,setLastUpdated] = useState(new Date());
   const [countdown,setCountdown] = useState(SCORE_REFRESH_SECONDS);
   const nextRefreshAtRef = useRef(0);
-  const hasBackendSession = !!apiToken.get();
+  const hasBackendSession = !!apiToken.get() || !!apiToken.getRefresh();
 
   // ── Persist critical state to localStorage ──
   useEffect(()=>{ LS.set("mgpp_pools", pools); },[pools]);
@@ -706,6 +724,26 @@ export default function GolfPoolPro() {
       return copy;
     });
   },[]);
+
+  // ── Handle invite links via URL hash or path e.g. #/join/token or /join/token ──
+  useEffect(() => {
+    const recovery = parseRecoveryTokensFromLocation();
+    if (!recovery?.accessToken) return;
+    try {
+      apiToken.set(recovery.accessToken);
+      if (recovery.refreshToken) apiToken.setRefresh(recovery.refreshToken);
+    } catch {}
+    setInvitePool(null);
+    setInviteView(true);
+    setAuthMode("reset");
+    setAuthError("");
+    setAuthSuccess("");
+    setForgotSent(false);
+    setView("invite");
+    try {
+      history.replaceState(null, "", "/");
+    } catch {}
+  }, []);
 
   // ── Handle invite links via URL hash or path e.g. #/join/token or /join/token ──
   useEffect(() => {
@@ -926,7 +964,7 @@ export default function GolfPoolPro() {
   }, [currentUser]);
 
   useEffect(() => {
-    if (!apiToken.get() && currentUser) {
+    if (!apiToken.get() && !apiToken.getRefresh() && currentUser) {
       setCurrentUser(null);
       LS.set("mgpp_session", null);
     }
@@ -935,7 +973,8 @@ export default function GolfPoolPro() {
   // Hydrate/validate backend auth session so "logged in" always matches server state.
   useEffect(() => {
     const t = apiToken.get();
-    if (!t) return;
+    const rt = apiToken.getRefresh();
+    if (!t && !rt) return;
     let cancelled = false;
     const hydrate = async () => {
       try {
@@ -1418,6 +1457,7 @@ export default function GolfPoolPro() {
       else if (/email not confirmed/i.test(msg)) setAuthError("Account setup is still completing. Try again in a few seconds.");
       else setAuthError(msg || "Login failed. Please check your email/password.");
     } finally {
+      setAuthPass("");
       setAuthBusy(false);
     }
   };
@@ -1455,6 +1495,7 @@ export default function GolfPoolPro() {
       if (/rate limit/i.test(msg)) setAuthError("Too many signup emails sent. Wait a few minutes and try again.");
       else setAuthError(msg || "Signup failed. Please try again.");
     } finally {
+      setAuthPass("");
       setAuthBusy(false);
     }
   };
@@ -1468,11 +1509,49 @@ export default function GolfPoolPro() {
       await Auth.forgotPassword(email);
       setForgotSent(true);
       setAuthError("");
+      setAuthSuccess("Password reset email sent. Check your inbox.");
       notify("Password reset email sent!");
     } catch (e) {
       const msg = String(e?.message || "");
       if (/rate limit/i.test(msg)) setAuthError("Reset email rate limit reached. Wait a few minutes and try again.");
       else setAuthError(msg || "Could not send reset email. Please try again.");
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleResetPasswordFromLink = async () => {
+    if (authBusy) return;
+    if (!resetPass || resetPass.length < 6) {
+      setAuthError("Password must be at least 6 characters.");
+      return;
+    }
+    if (resetPass !== resetPassConfirm) {
+      setAuthError("Passwords do not match.");
+      return;
+    }
+    if (!apiToken.get()) {
+      setAuthError("Reset link is invalid or expired. Request a new reset link.");
+      setAuthMode("forgot");
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      await Auth.resetPassword(resetPass);
+      setAuthError("");
+      setAuthSuccess("Password updated. You can now log in.");
+      setResetPass("");
+      setResetPassConfirm("");
+      try { apiToken.clear(); } catch {}
+      setAuthMode("login");
+    } catch (e) {
+      const msg = String(e?.message || "");
+      if (/expired|invalid|401|403/i.test(msg)) {
+        setAuthError("This reset link expired. Request a new one.");
+        setAuthMode("forgot");
+      } else {
+        setAuthError(msg || "Could not update password. Try again.");
+      }
     } finally {
       setAuthBusy(false);
     }
@@ -3156,6 +3235,50 @@ export default function GolfPoolPro() {
                   )}
                   <div style={{textAlign:"center"}}>
                     <button className="btn-link" onClick={()=>setAuthMode("login")}>Return to login</button>
+                  </div>
+                </div>
+              )}
+
+              {authMode==="reset" && (
+                <div>
+                  <h3 className="h3" style={{marginBottom:6}}>Set a New Password</h3>
+                  <p className="sub" style={{marginBottom:20,fontSize:13}}>Enter your new password to finish resetting your account.</p>
+                  <div className="fgrp">
+                    <label className="label">New Password</label>
+                    <input
+                      className="inp"
+                      type="password"
+                      name="new-password"
+                      autoComplete="new-password"
+                      placeholder="Min. 6 characters"
+                      value={resetPass}
+                      onChange={(e)=>{setResetPass(e.target.value);setAuthError("");}}
+                    />
+                  </div>
+                  <div className="fgrp">
+                    <label className="label">Confirm Password</label>
+                    <input
+                      className="inp"
+                      type="password"
+                      name="confirm-password"
+                      autoComplete="new-password"
+                      placeholder="Re-enter password"
+                      value={resetPassConfirm}
+                      onChange={(e)=>{setResetPassConfirm(e.target.value);setAuthError("");}}
+                    />
+                  </div>
+                  {authError && <p style={{color:"var(--red)",fontSize:13,marginBottom:12,fontWeight:600}}>{authError}</p>}
+                  {authSuccess && <p style={{color:"var(--green)",fontSize:13,marginBottom:12,fontWeight:700}}>{authSuccess}</p>}
+                  <button
+                    className="btn btn-prim"
+                    style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginBottom:12}}
+                    onClick={handleResetPasswordFromLink}
+                    disabled={authBusy}
+                  >
+                    {authBusy ? "Updating..." : "Update Password"}
+                  </button>
+                  <div style={{textAlign:"center"}}>
+                    <button className="btn-link" onClick={()=>{setAuthMode("login");setAuthError("");}}>Return to login</button>
                   </div>
                 </div>
               )}
