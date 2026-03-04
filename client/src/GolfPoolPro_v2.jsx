@@ -880,6 +880,28 @@ export default function GolfPoolPro() {
     notify("Password reset email sent!");
   };
 
+  const handleLogout = () => {
+    setCurrentUser(null);
+    setShowSettings(false);
+    setActivePool(null);
+    setInvitePool(null);
+    setInviteView(false);
+    setAuthMode("login");
+    setAuthEmail("");
+    setAuthPass("");
+    setAuthName("");
+    setAuthError("");
+    setAuthSuccess("");
+    setView("home");
+    clearHash();
+    try {
+      localStorage.removeItem("mgpp_session");
+      localStorage.removeItem("mgpp_token");
+      localStorage.removeItem("mgpp_user");
+    } catch {}
+    notify("Logged out.");
+  };
+
   // Stats helpers
   const getPlayerRounds = (gId) => {
     const ls = liveScores.find(l=>l.gId===gId);
@@ -949,7 +971,7 @@ export default function GolfPoolPro() {
                 style={{padding:"5px 12px",borderRadius:20,border:`1px solid ${showSettings?"rgba(200,169,79,.5)":"rgba(255,255,255,.18)"}`,background:showSettings?"rgba(200,169,79,.15)":"rgba(255,255,255,.06)",color:showSettings?"var(--gold)":"rgba(255,255,255,.55)",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",transition:"all .15s"}}>
                 ⚙ Settings
               </button>
-              <button onClick={()=>setCurrentUser(null)} style={{padding:"5px 12px",borderRadius:20,border:"1px solid rgba(255,255,255,.18)",background:"rgba(255,255,255,.06)",color:"rgba(255,255,255,.55)",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",transition:"all .15s"}}
+              <button onClick={handleLogout} style={{padding:"5px 12px",borderRadius:20,border:"1px solid rgba(255,255,255,.18)",background:"rgba(255,255,255,.06)",color:"rgba(255,255,255,.55)",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",transition:"all .15s"}}
                 onMouseEnter={e=>{e.target.style.background="rgba(220,38,38,.25)";e.target.style.color="#FCA5A5";e.target.style.borderColor="rgba(220,38,38,.4)";}}
                 onMouseLeave={e=>{e.target.style.background="rgba(255,255,255,.06)";e.target.style.color="rgba(255,255,255,.55)";e.target.style.borderColor="rgba(255,255,255,.18)";}}>
                 Log out
