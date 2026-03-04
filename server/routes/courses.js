@@ -188,13 +188,17 @@ async function searchCourses(query) {
     `${GOLF_COURSE_API_BASE}/courses?q=${q}`,
   ];
 
+  let lastError = null;
   for (const url of urls) {
     try {
       const json = await fetchJson(url);
       const courses = extractCourseList(json);
       if (courses.length) return courses;
-    } catch {}
+    } catch (e) {
+      lastError = e;
+    }
   }
+  if (lastError) throw lastError;
   return [];
 }
 
@@ -236,14 +240,18 @@ async function getCourseById(id) {
     `${GOLF_COURSE_API_BASE}/courses/${encoded}`,
   ];
 
+  let lastError = null;
   for (const url of urls) {
     try {
       const json = await fetchJson(url);
       if (json?.course) return normalizeCourse(json.course);
       if (json?.data && !Array.isArray(json.data)) return normalizeCourse(json.data);
       return normalizeCourse(json);
-    } catch {}
+    } catch (e) {
+      lastError = e;
+    }
   }
+  if (lastError) throw lastError;
   return null;
 }
 
