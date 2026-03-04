@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Golfers, Courses } from "./api";
+import { Golfers, Courses, Invites } from "./api";
 import {
   AreaChart, Area, LineChart, Line, BarChart, Bar,
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
@@ -485,6 +485,11 @@ const API_BASE = (
   import.meta.env.REACT_APP_API_URL ||
   "https://golfpoolpro.onrender.com"
 ).replace(/\/$/, "");
+const SITE_BASE = (
+  import.meta.env.VITE_SITE_URL ||
+  import.meta.env.REACT_APP_SITE_URL ||
+  (typeof window !== "undefined" ? window.location.origin : "https://golfpoolpro.vercel.app")
+).replace(/\/$/, "");
 const SCORE_REFRESH_MS = Math.max(1000, Number(import.meta.env.VITE_SCORE_REFRESH_MS || 30000));
 const SCORE_REFRESH_SECONDS = Math.ceil(SCORE_REFRESH_MS / 1000);
 const USE_MOCK_FIELD = String(import.meta.env.VITE_USE_MOCK_FIELD || "").toLowerCase() === "true";
@@ -495,6 +500,16 @@ const fmtTDate = (isoDate) => {
   const d = new Date(isoDate);
   if(Number.isNaN(d.getTime())) return "TBD";
   return d.toLocaleDateString(undefined, {month:"short", day:"numeric", year:"numeric"});
+};
+
+const parseInviteTokenFromLocation = () => {
+  if (typeof window === "undefined") return null;
+  const hash = window.location.hash || "";
+  const hashMatch = hash.match(/^#\/join\/([^/?#]+)/i);
+  if (hashMatch?.[1]) return decodeURIComponent(hashMatch[1]);
+  const pathMatch = window.location.pathname.match(/^\/join\/([^/?#]+)/i);
+  if (pathMatch?.[1]) return decodeURIComponent(pathMatch[1]);
+  return null;
 };
 
 /* ─── HELPERS ─── */
@@ -641,26 +656,59 @@ export default function GolfPoolPro() {
     });
   },[]);
 
-  // ── Handle invite links via URL hash e.g. #/join/p1 ──
-  useEffect(()=>{
-    const handleHash = () => {
-      const hash = window.location.hash;
-      const m = hash.match(/^#\/join\/(.+)/);
-      if(m){
-        const poolId = decodeURIComponent(m[1]);
-        const pool = pools.find(p=>p.id===poolId);
-        if(pool){ openInvite(pool); }
-        else {
-          // Pool not found — still show invite/login screen
+  // ── Handle invite links via URL hash or path e.g. #/join/token or /join/token ──
+  useEffect(() => {
+    let cancelled = false;
+    const handleInviteRoute = async () => {
+      const token = parseInviteTokenFromLocation();
+      if (!token) return;
+
+      const localPool = pools.find(
+        (p) =>
+          p.invite_token === token ||
+          p.inviteToken === token ||
+          p.id === token
+      );
+      if (localPool) {
+        openInvite(localPool);
+        return;
+      }
+
+      try {
+        const resp = await Invites.resolve(token);
+        if (cancelled) return;
+        const resolved = resp?.pool;
+        if (!resolved) throw new Error("Invite not found");
+        const mappedPool = {
+          id: resolved.id,
+          name: resolved.name || "Pool Invite",
+          status: resolved.status || "lobby",
+          maxParticipants: resolved.max_participants || 8,
+          participants: resolved.current_members || 0,
+          teamSize: resolved.team_size || 4,
+          scoringGolfers: resolved.scoring_golfers || 2,
+          tournamentId: resolved.tournament?.id || "",
+          invite_token: resolved.invite_token || token,
+          hostId: resolved.host_id || null,
+        };
+        openInvite(mappedPool);
+      } catch {
+        if (!cancelled) {
           openInvite(null);
-          notify("This invite link may have expired or the pool was deleted.","error");
+          notify("This invite link may have expired or the pool was deleted.", "error");
         }
       }
     };
-    handleHash(); // check on mount
-    window.addEventListener("hashchange", handleHash);
-    return ()=>window.removeEventListener("hashchange", handleHash);
-  },[]); // eslint-disable-line
+
+    handleInviteRoute();
+    window.addEventListener("hashchange", handleInviteRoute);
+    window.addEventListener("popstate", handleInviteRoute);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("hashchange", handleInviteRoute);
+      window.removeEventListener("popstate", handleInviteRoute);
+    };
+  }, [pools]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Clear hash after handling so back-button works ──
   const clearHash = () => {
@@ -957,6 +1005,12 @@ export default function GolfPoolPro() {
     notify("Link copied to clipboard!");
   };
 
+  const buildInviteUrl = (pool) => {
+    const token = pool?.invite_token || pool?.inviteToken || pool?.id;
+    if (!token) return `${SITE_BASE}/`;
+    return `${SITE_BASE}/#/join/${encodeURIComponent(token)}`;
+  };
+
   const openPool = (pool) => {
     setActivePool(pool);
     if(pool.status==="live") setPoolPhase("live");
@@ -977,6 +1031,21 @@ export default function GolfPoolPro() {
 
   const joinPool = (userId, pool) => {
     if(!pool) return;
+    // Ensure pool exists locally (important when invite was resolved from backend).
+    setPools(ps=>{
+      if(ps.find(p=>p.id===pool.id)) return ps;
+      return [...ps, {
+        ...pool,
+        participants: pool.participants || 0,
+        maxParticipants: pool.maxParticipants || 8,
+        teamSize: pool.teamSize || 4,
+        scoringGolfers: pool.scoringGolfers || 2,
+        cutLine: pool.cutLine || 2,
+        shotClock: pool.shotClock || 60,
+        draftOrderType: pool.draftOrderType || "ordered",
+        created: pool.created || new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"}),
+      }];
+    });
     // Add user to pool members
     setPoolMembers(m=>{
       const existing = m[pool.id]||[];
@@ -1440,9 +1509,9 @@ export default function GolfPoolPro() {
                       <h4 className="h4" style={{marginBottom:8}}>Invite More Players</h4>
                       <p className="sub" style={{marginBottom:12,fontSize:13}}>Share this link so others can log in or create an account to join.</p>
                       <div className="link-box" style={{marginBottom:10}}>
-                        <span className="link-txt">mygolfpoolpro.com/join/{activePool.id}</span>
+                        <span className="link-txt">{buildInviteUrl(activePool)}</span>
                         <div style={{display:"flex",gap:6,flexShrink:0}}>
-                          <button className="btn btn-ghost btn-sm" onClick={()=>copyLink(`https://mygolfpoolpro.com/join/${activePool.id}`)}>Copy</button>
+                          <button className="btn btn-ghost btn-sm" onClick={()=>copyLink(buildInviteUrl(activePool))}>Copy</button>
                           <button className="btn btn-prim btn-sm" onClick={()=>openInvite(activePool)}>Preview</button>
                         </div>
                       </div>
@@ -2397,6 +2466,7 @@ export default function GolfPoolPro() {
                       cutLine:config.cutLine,
                       shotClock:config.shotClock,
                       draftOrderType:config.draftOrderType,
+                      invite_token: Math.random().toString(36).slice(2, 10),
                       yourRank:null,yourScore:null,
                       hostId: currentUser||1,
                       created: new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"})
@@ -2449,15 +2519,15 @@ export default function GolfPoolPro() {
                     </div>
                   </div>
                   <div className="link-box" style={{marginBottom:16}}>
-                    <span className="link-txt">mygolfpoolpro.com/join/pool_{config.poolName.toLowerCase().replace(/\s+/g,"_")}</span>
+                    <span className="link-txt">{activePool ? buildInviteUrl(activePool) : `${SITE_BASE}/#/join/your-invite-token`}</span>
                     <div style={{display:"flex",gap:6,flexShrink:0}}>
-                      <button className="btn btn-ghost btn-sm" onClick={()=>copyLink(`https://mygolfpoolpro.com/join/pool_${config.poolName.toLowerCase().replace(/\s+/g,"_")}`)}>📋 Copy</button>
-                      <button className="btn btn-prim btn-sm" onClick={()=>openInvite(null)}>👁️ Preview</button>
+                      <button className="btn btn-ghost btn-sm" onClick={()=>copyLink(activePool ? buildInviteUrl(activePool) : `${SITE_BASE}/#/join/your-invite-token`)}>📋 Copy</button>
+                      <button className="btn btn-prim btn-sm" onClick={()=>openInvite(activePool || null)}>👁️ Preview</button>
                     </div>
                   </div>
                   <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
                     {["📧 Email invite","💬 Copy for text","🐦 Share link"].map(l=>(
-                      <button key={l} className="btn btn-ghost btn-sm" onClick={()=>copyLink(`https://mygolfpoolpro.com/join/pool_${config.poolName.toLowerCase().replace(/\s+/g,"_")}`)}>
+                      <button key={l} className="btn btn-ghost btn-sm" onClick={()=>copyLink(activePool ? buildInviteUrl(activePool) : `${SITE_BASE}/#/join/your-invite-token`)}>
                         {l}
                       </button>
                     ))}
