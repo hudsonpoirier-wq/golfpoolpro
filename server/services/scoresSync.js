@@ -1,5 +1,5 @@
 // server/services/scoresSync.js
-// Syncs live tournament scores from SportsDataIO (or fallback: TheSportsDB)
+// Syncs live tournament scores from TheSportsDB (primary) or SportsDataIO (fallback)
 // Called every 30 seconds by the cron job in server/index.js
 
 const fetch = require("node-fetch");  // npm install node-fetch@2
@@ -8,7 +8,30 @@ const SPORTS_DATA_KEY = process.env.SPORTS_DATA_IO_KEY;
 const SPORTS_DATA_BASE = "https://api.sportsdata.io/golf/v2/json";
 
 // Alternative free API (no key required, less detail):
-const THE_SPORTS_DB = "https://www.thesportsdb.com/api/v1/json/3";
+const THE_SPORTS_DB_KEY = process.env.THE_SPORTS_DB_KEY || "3";
+const THE_SPORTS_DB = `https://www.thesportsdb.com/api/v1/json/${THE_SPORTS_DB_KEY}`;
+const SCORE_PROVIDER = (process.env.SCORE_PROVIDER || "THESPORTSDB").toUpperCase();
+
+function parseMap(raw) {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") return parsed;
+  } catch {}
+  return {};
+}
+
+// Map internal IDs (t1, t4, etc.) -> TheSportsDB event IDs
+const THE_SPORTS_DB_EVENT_MAP = parseMap(process.env.THE_SPORTS_DB_EVENT_MAP);
+// Map internal IDs (t1, t4, etc.) -> SportsDataIO tournament IDs
+const SPORTS_DATA_TOURNAMENT_MAP = {
+  t4: 20508,
+  t8: 20512,
+  t11: 20516,
+  t15: 20520,
+  t1: 20505,
+  ...parseMap(process.env.SPORTS_DATA_TOURNAMENT_MAP),
+};
 
 /**
  * Main sync function — called by cron every 30s
@@ -54,35 +77,90 @@ async function syncLiveScores(supabase) {
   }
 }
 
-/**
- * Fetch scores from SportsDataIO
- *
- * GET https://api.sportsdata.io/golf/v2/json/Leaderboard/{tournamentId}
- *     ?key={SPORTS_DATA_IO_KEY}
- *
- * Docs: https://sportsdata.io/developers/api-documentation/golf
- * Free tier: 1,000 calls/month. Paid: real-time updates.
- *
- * IMPORTANT: Replace tournamentId mapping below with real SportsDataIO IDs
- * once you have your API key and know your tournament IDs.
- */
 async function fetchScores(internalTournamentId) {
-  if (!SPORTS_DATA_KEY) {
-    console.warn("SPORTS_DATA_IO_KEY not set — using mock score data");
-    return null;  // Falls back to existing mock data in DB
+  if (SCORE_PROVIDER === "SPORTSDATAIO") {
+    const sportsData = await fetchSportsDataScores(internalTournamentId);
+    if (sportsData?.length) return sportsData;
+    return fetchTheSportsDbScores(internalTournamentId);
+  }
+  const theSportsDb = await fetchTheSportsDbScores(internalTournamentId);
+  if (theSportsDb?.length) return theSportsDb;
+  return fetchSportsDataScores(internalTournamentId);
+}
+
+function normalizeScoreRow(raw) {
+  const rankRaw = raw.rank || raw.position || raw.intRank || raw.strPosition || raw.Place;
+  const scoreRaw = raw.score || raw.intScore || raw.TotalScore || raw.TotalStrokes;
+  const toParRaw = raw.toPar || raw.strToPar || raw.TotalToPar;
+  const r1 = Number(raw.r1 ?? raw.Round1 ?? raw.intRound1 ?? 0);
+  const r2 = Number(raw.r2 ?? raw.Round2 ?? raw.intRound2 ?? 0);
+  const r3 = Number(raw.r3 ?? raw.Round3 ?? raw.intRound3 ?? 0);
+  const r4 = Number(raw.r4 ?? raw.Round4 ?? raw.intRound4 ?? 0);
+
+  const derivedRoundSum = [r1, r2, r3, r4].reduce((s, v) => s + (Number.isFinite(v) ? v : 0), 0);
+  const scoreNum = Number(scoreRaw);
+  const toParNum = Number(toParRaw);
+
+  return {
+    golferId: Number(raw.golferId || raw.idPlayer || raw.PlayerID || raw.player_id),
+    position: Number(rankRaw) || 999,
+    r1: Number.isFinite(r1) ? r1 : null,
+    r2: Number.isFinite(r2) ? r2 : null,
+    r3: Number.isFinite(r3) ? r3 : null,
+    r4: Number.isFinite(r4) ? r4 : null,
+    // If provider only gives total-to-par, place it in R4 so standings can still move.
+    ...(Number.isFinite(scoreNum) || Number.isFinite(toParNum) ? {
+      r4: Number.isFinite(toParNum) ? toParNum : Number.isFinite(scoreNum) ? scoreNum : derivedRoundSum,
+    } : {}),
+    birdies: [0, 0, 0, 0],
+    eagles: [0, 0, 0, 0],
+    bogeys: [0, 0, 0, 0],
+  };
+}
+
+async function fetchTheSportsDbScores(internalTournamentId) {
+  const eventId = THE_SPORTS_DB_EVENT_MAP[internalTournamentId];
+  if (!eventId) {
+    console.warn(`THE_SPORTS_DB_EVENT_MAP missing tournament ${internalTournamentId}`);
+    return null;
   }
 
-  // Map your internal tournament IDs to SportsDataIO tournament IDs
-  // You can get these from: GET /golf/v2/json/Tournaments/{year}
-  const tournamentIdMap = {
-    "t4":  20508,  // Masters 2026 — UPDATE with real ID
-    "t8":  20512,  // PGA Championship 2026 — UPDATE with real ID
-    "t11": 20516,  // US Open 2026 — UPDATE with real ID
-    "t15": 20520,  // The Open 2026 — UPDATE with real ID
-    "t1":  20505,  // THE PLAYERS — UPDATE with real ID
-  };
+  // Try multiple endpoints because TheSportsDB payload shape can vary by event/sport.
+  const urls = [
+    `${THE_SPORTS_DB}/lookupeventstats.php?id=${eventId}`,
+    `${THE_SPORTS_DB}/lookupevent.php?id=${eventId}`,
+    `${THE_SPORTS_DB}/lookupround.php?id=${eventId}`,
+  ];
 
-  const externalId = tournamentIdMap[internalTournamentId];
+  for (const url of urls) {
+    try {
+      const resp = await fetch(url, { timeout: 8000 });
+      if (!resp.ok) continue;
+      const json = await resp.json();
+      const candidateLists = [
+        json?.players,
+        json?.playerstats,
+        json?.eventstats,
+        json?.leaderboard,
+        json?.results,
+      ].filter(Array.isArray);
+
+      for (const list of candidateLists) {
+        const normalized = list
+          .map(normalizeScoreRow)
+          .filter((row) => Number.isFinite(row.golferId));
+        if (normalized.length) return normalized;
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
+async function fetchSportsDataScores(internalTournamentId) {
+  if (!SPORTS_DATA_KEY) return null;
+
+  const externalId = SPORTS_DATA_TOURNAMENT_MAP[internalTournamentId];
   if (!externalId) return null;
 
   const url = `${SPORTS_DATA_BASE}/Leaderboard/${externalId}?key=${SPORTS_DATA_KEY}`;
@@ -92,15 +170,13 @@ async function fetchScores(internalTournamentId) {
   const json = await resp.json();
   const players = json.Players || [];
 
-  return players.map(p => ({
+  return players.map((p) => ({
     golferId: p.PlayerID,
     position: parseInt(p.Rank) || 999,
     r1: p.Round1 ?? null,
     r2: p.Round2 ?? null,
     r3: p.Round3 ?? null,
     r4: p.Round4 ?? null,
-    // SportsDataIO doesn't provide per-round birdie/eagle/bogey breakdowns in free tier
-    // You'd compute these from hole-by-hole data (paid plan)
     birdies: [0,0,0,0],
     eagles: [0,0,0,0],
     bogeys: [0,0,0,0],
@@ -112,25 +188,61 @@ async function fetchScores(internalTournamentId) {
  * Call this once when setting up: GET /api/admin/seed-golfers
  */
 async function seedGolfers(supabase) {
-  if (!SPORTS_DATA_KEY) return { error: "SPORTS_DATA_IO_KEY not set" };
+  const fromSportsData = async () => {
+    if (!SPORTS_DATA_KEY) return null;
+    const url = `${SPORTS_DATA_BASE}/Players?key=${SPORTS_DATA_KEY}`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`SportsDataIO returned ${resp.status}`);
+    const players = await resp.json();
+    return players.map((p) => ({
+      id: p.PlayerID,
+      name: `${p.FirstName} ${p.LastName}`,
+      country: p.Country || "🌍",
+      world_rank: p.WorldGolfRank || 999,
+      scoring_avg: p.FantasyPoints || null,
+      sg_total: null,
+      driv_dist: p.DrivingDistance || null,
+      driv_acc: p.DrivingAccuracy || null,
+      gir: p.GreensInRegulation || null,
+      putts: p.PuttingAverage || null,
+      updated_at: new Date().toISOString(),
+    }));
+  };
 
-  const url = `${SPORTS_DATA_BASE}/Players?key=${SPORTS_DATA_KEY}`;
-  const resp = await fetch(url);
-  const players = await resp.json();
+  const fromTheSportsDb = async () => {
+    // This endpoint is sport-agnostic and may return partial profile fields.
+    const url = `${THE_SPORTS_DB}/searchplayers.php?p=`;
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    const json = await resp.json();
+    const players = json?.player;
+    if (!Array.isArray(players) || !players.length) return null;
+    return players
+      .map((p) => ({
+        id: Number(p.idPlayer),
+        name: p.strPlayer,
+        country: p.strNationality || "🌍",
+        world_rank: null,
+        scoring_avg: null,
+        sg_total: null,
+        driv_dist: null,
+        driv_acc: null,
+        gir: null,
+        putts: null,
+        updated_at: new Date().toISOString(),
+      }))
+      .filter((p) => Number.isFinite(p.id) && p.name);
+  };
 
-  const rows = players.map(p => ({
-    id: p.PlayerID,
-    name: `${p.FirstName} ${p.LastName}`,
-    country: p.Country || "🌍",
-    world_rank: p.WorldGolfRank || 999,
-    scoring_avg: p.FantasyPoints || null,
-    sg_total: null,
-    driv_dist: p.DrivingDistance || null,
-    driv_acc: p.DrivingAccuracy || null,
-    gir: p.GreensInRegulation || null,
-    putts: p.PuttingAverage || null,
-    updated_at: new Date().toISOString(),
-  }));
+  let rows = null;
+  try {
+    rows = SCORE_PROVIDER === "SPORTSDATAIO" ? await fromSportsData() : await fromTheSportsDb();
+    if (!rows?.length) rows = await fromSportsData();
+  } catch {
+    rows = await fromSportsData();
+  }
+
+  if (!rows?.length) return { error: "No golfers returned from provider(s)" };
 
   const { error } = await supabase
     .from("golfers")
