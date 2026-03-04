@@ -678,6 +678,7 @@ export default function GolfPoolPro() {
   const [lastUpdated,setLastUpdated] = useState(new Date());
   const [countdown,setCountdown] = useState(SCORE_REFRESH_SECONDS);
   const nextRefreshAtRef = useRef(0);
+  const hasBackendSession = !!apiToken.get();
 
   // ── Persist critical state to localStorage ──
   useEffect(()=>{ LS.set("mgpp_pools", pools); },[pools]);
@@ -921,6 +922,13 @@ export default function GolfPoolPro() {
     }
   }, [currentUser]);
 
+  useEffect(() => {
+    if (!apiToken.get() && currentUser) {
+      setCurrentUser(null);
+      LS.set("mgpp_session", null);
+    }
+  }, [currentUser]);
+
   // Hydrate/validate backend auth session so "logged in" always matches server state.
   useEffect(() => {
     const t = apiToken.get();
@@ -1052,9 +1060,9 @@ export default function GolfPoolPro() {
     return () => { cancelled = true; clearInterval(t); };
   }, [activePool?.id, view, currentUser]);
 
-  // Require login for all non-invite screens.
+  // Require backend auth session for all non-invite screens.
   useEffect(()=>{
-    if(!currentUser && view!=="invite"){
+    if(!hasBackendSession && view!=="invite"){
       setActivePool(null);
       setView("invite");
       setInvitePool(null);
@@ -1062,12 +1070,7 @@ export default function GolfPoolPro() {
       setAuthMode("login");
       setAuthError("");
     }
-    if(typeof currentUser === "number" && currentUser && !accounts.find(a=>a.id===currentUser)){
-      setCurrentUser(null);
-      setView("invite");
-      setAuthMode("login");
-    }
-  },[currentUser, view, accounts]);
+  },[hasBackendSession, view]);
 
   // Active pool config
   const poolConfig = activePool || config;
@@ -2829,7 +2832,10 @@ export default function GolfPoolPro() {
                       return;
                     }
                     if (!apiToken.get()) {
-                      notify("Please log in before creating a shared pool.", "error");
+                      notify("Session expired. Please log in again before creating a shared pool.", "error");
+                      setView("invite");
+                      setInviteView(true);
+                      setAuthMode("login");
                       return;
                     }
                     // Prefer backend pool creation for multi-user shared lobbies.
