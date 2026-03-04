@@ -487,6 +487,7 @@ const API_BASE = (
 ).replace(/\/$/, "");
 const SCORE_REFRESH_MS = Math.max(1000, Number(import.meta.env.VITE_SCORE_REFRESH_MS || 30000));
 const SCORE_REFRESH_SECONDS = Math.ceil(SCORE_REFRESH_MS / 1000);
+const USE_MOCK_FIELD = String(import.meta.env.VITE_USE_MOCK_FIELD || "").toLowerCase() === "true";
 const DEMO_EMAILS = new Set(["james@example.com","sarah@example.com","mike@example.com","emma@example.com","david@example.com"]);
 
 const fmtTDate = (isoDate) => {
@@ -792,14 +793,14 @@ export default function GolfPoolPro() {
 
   // Active pool config
   const poolConfig = activePool || config;
-  const golferCatalog = apiGolfers.length ? apiGolfers : FULL_FIELD;
+  const golferCatalog = apiGolfers.length ? apiGolfers : (USE_MOCK_FIELD ? FULL_FIELD : []);
   const getTournamentById = (id) => tournaments.find(x=>x.id===id);
   const getTournamentFieldSize = (id) => {
     const t = getTournamentById(id);
     const field = Number(t?.field);
     if (Number.isFinite(field) && field > 0) return field;
     if (id && id === selectedTournamentId && apiGolfers.length) return apiGolfers.length;
-    return golferCatalog.length;
+    return 156;
   };
   const poolTournamentField = (() => {
     const tournamentId = poolConfig.tournamentId||poolConfig.tournament;
@@ -808,7 +809,7 @@ export default function GolfPoolPro() {
     const fieldLimit = Math.min(getTournamentFieldSize(tournamentId), golferCatalog.length);
     return golferCatalog.filter(p=>p.rank<=fieldLimit);
   })();
-  const findGolferById = (id) => poolTournamentField.find(x=>x.id===id) || apiGolfers.find(x=>x.id===id) || FULL_FIELD.find(x=>x.id===id);
+  const findGolferById = (id) => poolTournamentField.find(x=>x.id===id) || apiGolfers.find(x=>x.id===id);
 
   const filteredField = poolTournamentField.filter(g =>
     g.name.toLowerCase().includes(search.toLowerCase())
@@ -881,6 +882,10 @@ export default function GolfPoolPro() {
   };
 
   const startDraft = () => {
+    if (poolTournamentField.length === 0) {
+      notify("No real tournament field is loaded yet. Seed golfer data first.", "error");
+      return;
+    }
     // If random order, shuffle participant indices and store them
     if(draftOrderType === "random") {
       const indices = joinedParticipants.map((_,i)=>i);
@@ -1477,7 +1482,12 @@ export default function GolfPoolPro() {
                     <p style={{fontSize:56,marginBottom:16}}>🏌️</p>
                     <h2 className="h2" style={{marginBottom:10}}>Ready to Draft</h2>
                     <p className="sub" style={{marginBottom:28}}>{poolTournamentField.length} golfers available · Best {activePool.scoringGolfers} of {activePool.teamSize} count</p>
-                    <button className="btn btn-gold" style={{fontSize:16,padding:"14px 32px"}} onClick={startDraft}>Start Draft →</button>
+                    {poolTournamentField.length===0 && (
+                      <p style={{fontSize:13,color:"var(--red)",marginBottom:14}}>
+                        No live field is loaded for this tournament yet.
+                      </p>
+                    )}
+                    <button className="btn btn-gold" style={{fontSize:16,padding:"14px 32px"}} onClick={startDraft} disabled={poolTournamentField.length===0}>Start Draft →</button>
                   </div>
                 )}
                 {draftDone && (
@@ -2232,7 +2242,7 @@ export default function GolfPoolPro() {
                           <div style={{textAlign:"center",padding:"40px 20px",color:"var(--muted)"}}>
                             <p style={{fontSize:32,marginBottom:8}}>⚖️</p>
                             <p style={{fontSize:14,fontWeight:600}}>Select two players above to compare</p>
-                            <p style={{fontSize:12,marginTop:4}}>Choose from the full tournament field</p>
+                            <p style={{fontSize:12,marginTop:4}}>No live tournament field loaded yet (seed golfers/API data).</p>
                           </div>
                         )}
                       </div>
