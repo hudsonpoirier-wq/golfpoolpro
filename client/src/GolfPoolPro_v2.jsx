@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Golfers } from "./api";
+import { Golfers, Courses } from "./api";
 import {
   AreaChart, Area, LineChart, Line, BarChart, Bar,
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
@@ -480,7 +480,11 @@ const initAccounts = () => {
   return saved;
 };
 
-const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+const API_BASE = (
+  import.meta.env.VITE_API_URL ||
+  import.meta.env.REACT_APP_API_URL ||
+  "https://golfpoolpro.onrender.com"
+).replace(/\/$/, "");
 const DEMO_EMAILS = new Set(["james@example.com","sarah@example.com","mike@example.com","emma@example.com","david@example.com"]);
 
 const fmtTDate = (isoDate) => {
@@ -551,6 +555,7 @@ export default function GolfPoolPro() {
   const [accounts,setAccounts] = useState(()=> initAccounts());
   const [tournaments,setTournaments] = useState([]);
   const [apiGolfers,setApiGolfers] = useState([]);
+  const [tournamentCourse,setTournamentCourse] = useState(null);
   const [notification,setNotification] = useState(null);
   const [showTournamentInfo,setShowTournamentInfo] = useState(false);
   const [poolTab,setPoolTab] = useState("leaderboard");
@@ -685,15 +690,17 @@ export default function GolfPoolPro() {
     if(!selectedTournamentId){
       setApiGolfers([]);
       setLiveScores([]);
+      setTournamentCourse(null);
       setCountdown(30);
       return;
     }
 
     const pull = async () => {
       try {
-        const [{ golfers }, { scores }] = await Promise.all([
+        const [{ golfers }, { scores }, courseResp] = await Promise.all([
           Golfers.list(selectedTournamentId),
           Golfers.scores(selectedTournamentId),
+          Courses.forTournament(selectedTournamentId).catch(()=>({ course: null })),
         ]);
 
         setApiGolfers((golfers||[]).map(g=>({
@@ -721,6 +728,7 @@ export default function GolfPoolPro() {
           eagles: s.eagles || [0,0,0,0],
           bogeys: s.bogeys || [0,0,0,0],
         })));
+        setTournamentCourse(courseResp?.course || null);
         setLastUpdated(new Date());
       } catch {}
     };
@@ -751,7 +759,7 @@ export default function GolfPoolPro() {
 
   // Active pool config
   const poolConfig = activePool || config;
-  const golferCatalog = apiGolfers;
+  const golferCatalog = apiGolfers.length ? apiGolfers : FULL_FIELD;
   const poolTournamentField = (() => {
     const t = tournaments.find(x=>x.id===poolConfig.tournamentId||x.id===poolConfig.tournament);
     if(!t) return golferCatalog;
@@ -2231,6 +2239,13 @@ export default function GolfPoolPro() {
                       <div style={{background:"rgba(27,67,50,.05)",borderRadius:10,padding:"11px 14px",marginBottom:16,border:"1px solid rgba(27,67,50,.08)"}}>
                         <p style={{fontSize:13,fontWeight:600,color:"var(--forest)",marginBottom:3}}>{t.name}</p>
                         <p style={{fontSize:12,color:"var(--muted)"}}>{t.venue} · {t.date} · {t.purse} purse · <strong>{Math.min(t.field,FULL_FIELD.length)} players</strong></p>
+                        {tournamentCourse && (
+                          <p style={{fontSize:12,color:"var(--muted)",marginTop:5}}>
+                            Course API: <strong>{tournamentCourse.name}</strong>
+                            {tournamentCourse.location ? ` · ${tournamentCourse.location}` : ""}
+                            {tournamentCourse.par ? ` · Par ${tournamentCourse.par}` : ""}
+                          </p>
+                        )}
                       </div>
                     );
                   })()}

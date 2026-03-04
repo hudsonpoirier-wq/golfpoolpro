@@ -24,7 +24,14 @@ npm --prefix server install
 cp server/.env.example server/.env
 ```
 
-Then fill in real Supabase and SportsDataIO keys in `server/.env`.
+Then fill in real Supabase/SportsDataIO keys in `server/.env`.
+
+Optional (recommended): add GolfCourseAPI integration in `server/.env`:
+
+```bash
+GOLFCOURSE_API_KEY=your-golfcourseapi-key
+GOLFCOURSE_API_BASE=https://api.golfcourseapi.com
+```
 
 3. Start website (frontend + backend):
 
@@ -36,9 +43,22 @@ Frontend: `http://localhost:5173`
 
 Backend: `http://localhost:4000`
 
+4. Frontend API target (for production):
+
+`client/.env` should point to your backend:
+
+```bash
+VITE_API_URL=https://golfpoolpro.onrender.com
+VITE_SITE_URL=https://golfpoolpro.vercel.app
+```
+
 ## Notes
 
 - Frontend source entry: `client/src/main.jsx`
 - Main UI component: `client/src/GolfPoolPro_v2.jsx`
 - Backend API entry: `server/index.js`
 - SQL schema: `server/schema.sql`
+- GolfCourse endpoints:
+  - `GET /api/courses/search?q=augusta`
+  - `GET /api/courses/:id`
+  - `GET /api/courses/tournament/:id`

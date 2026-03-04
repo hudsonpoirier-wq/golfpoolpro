@@ -24,6 +24,7 @@ const scoreRoutes   = require("./routes/scores");
 const inviteRoutes  = require("./routes/invites");
 const draftRoutes   = require("./routes/draft");
 const tournamentRoutes = require("./routes/tournaments");
+const courseRoutes = require("./routes/courses");
 const { syncLiveScores, seedGolfers, resolveTheSportsDbEventId } = require("./services/scoresSync");
 const { seedUpcomingTournaments } = require("./services/tournamentSync");
 
@@ -66,6 +67,7 @@ app.use("/api/scores",  scoreRoutes);
 app.use("/api/invite",  inviteRoutes);
 app.use("/api/draft",   draftRoutes);
 app.use("/api/tournaments", tournamentRoutes);
+app.use("/api/courses", courseRoutes);
 
 // Health check
 app.get("/api/health", (_req, res) => res.json({ status: "ok", ts: new Date().toISOString() }));

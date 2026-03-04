@@ -187,6 +187,20 @@ export const Golfers = {
 
 
 // ════════════════════════════════════════════════════════════
+// COURSES
+// ════════════════════════════════════════════════════════════
+
+export const Courses = {
+  /** Search courses by text query */
+  search: (q) => get(`/api/courses/search?q=${encodeURIComponent(q)}`, false),
+  /** Get one course by provider ID */
+  get: (id) => get(`/api/courses/${encodeURIComponent(id)}`, false),
+  /** Resolve best course match for tournament venue/name */
+  forTournament: (tournamentId) => get(`/api/courses/tournament/${encodeURIComponent(tournamentId)}`, false),
+};
+
+
+// ════════════════════════════════════════════════════════════
 // DRAFT
 // ════════════════════════════════════════════════════════════
 
