@@ -78,6 +78,7 @@ VITE_SITE_URL=https://golfpoolpro.vercel.app
   - `GET /api/courses/tournament/:id`
 - Admin field import endpoint:
   - `POST /api/admin/import-field/:tournamentId` with `x-admin-token`
+  - `POST /api/admin/import-field-auto/:tournamentId` (auto from TheSportsDB)
   - Body supports either:
     - JSON: `{"players":[{"name":"Scottie Scheffler","country":"USA","world_rank":1}]}`
     - CSV text: `{"csv":"name,country,world_rank\nScottie Scheffler,USA,1"}`

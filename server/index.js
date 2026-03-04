@@ -16,6 +16,7 @@ const helmet     = require("helmet");
 const rateLimit  = require("express-rate-limit");
 const cron       = require("node-cron");
 const crypto     = require("crypto");
+const fetch      = require("node-fetch");
 const { createClient } = require("@supabase/supabase-js");
 
 const authRoutes    = require("./routes/auth");
@@ -203,6 +204,49 @@ function parsePlayersFromBody(body) {
   return [];
 }
 
+async function importFieldPlayersIntoTournament(tournamentId, players) {
+  const uniqueByName = new Map();
+  for (const p of players) {
+    const name = normalizePlayerName(p.name || p.player || p.full_name);
+    if (!name) continue;
+    const k = name.toLowerCase();
+    if (!uniqueByName.has(k)) {
+      uniqueByName.set(k, {
+        name,
+        country: p.country || p.nationality || null,
+        world_rank: Number(p.world_rank || p.rank) || null,
+      });
+    }
+  }
+  const normalizedPlayers = Array.from(uniqueByName.values());
+  if (!normalizedPlayers.length) return { imported: 0 };
+
+  const golferRows = normalizedPlayers.map((p) => ({
+    id: toStableGolferId(p.name),
+    name: p.name,
+    country: p.country || null,
+    world_rank: p.world_rank || null,
+    updated_at: new Date().toISOString(),
+  }));
+
+  const { error: golfersError } = await supabase
+    .from("golfers")
+    .upsert(golferRows, { onConflict: "id" });
+  if (golfersError) return { error: golfersError.message };
+
+  const scoreShellRows = golferRows.map((g) => ({
+    tournament_id: tournamentId,
+    golfer_id: g.id,
+    updated_at: new Date().toISOString(),
+  }));
+  const { error: scoreShellError } = await supabase
+    .from("tournament_scores")
+    .upsert(scoreShellRows, { onConflict: "tournament_id,golfer_id", ignoreDuplicates: true });
+  if (scoreShellError) return { error: scoreShellError.message };
+
+  return { imported: golferRows.length };
+}
+
 app.post("/api/admin/import-field/:tournamentId", async (req, res, next) => {
   try {
     const required = process.env.ADMIN_TOKEN;
@@ -218,40 +262,78 @@ app.post("/api/admin/import-field/:tournamentId", async (req, res, next) => {
       });
     }
 
-    const uniqueByName = new Map();
-    for (const p of players) {
-      const k = p.name.toLowerCase();
-      if (!uniqueByName.has(k)) uniqueByName.set(k, p);
-    }
-    const normalizedPlayers = Array.from(uniqueByName.values());
-
-    const golferRows = normalizedPlayers.map((p) => ({
-      id: toStableGolferId(p.name),
-      name: p.name,
-      country: p.country || null,
-      world_rank: p.world_rank || null,
-      updated_at: new Date().toISOString(),
-    }));
-
-    const { error: golfersError } = await supabase
-      .from("golfers")
-      .upsert(golferRows, { onConflict: "id" });
-    if (golfersError) return res.status(400).json({ error: golfersError.message });
-
-    const scoreShellRows = golferRows.map((g) => ({
-      tournament_id: tournamentId,
-      golfer_id: g.id,
-      updated_at: new Date().toISOString(),
-    }));
-    const { error: scoreShellError } = await supabase
-      .from("tournament_scores")
-      .upsert(scoreShellRows, { onConflict: "tournament_id,golfer_id", ignoreDuplicates: true });
-    if (scoreShellError) return res.status(400).json({ error: scoreShellError.message });
+    const result = await importFieldPlayersIntoTournament(tournamentId, players);
+    if (result?.error) return res.status(400).json({ error: result.error });
 
     return res.json({
-      imported: golferRows.length,
+      imported: result.imported || 0,
       tournament_id: tournamentId,
       message: "Tournament field imported. Draft list will now use this field.",
+    });
+  } catch (e) {
+    return next(e);
+  }
+});
+
+app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) => {
+  try {
+    const required = process.env.ADMIN_TOKEN;
+    if (required && req.headers["x-admin-token"] !== required) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const { tournamentId } = req.params;
+    const eventId = String(tournamentId || "").startsWith("tsdb_")
+      ? String(tournamentId).slice(5)
+      : await resolveTheSportsDbEventId(tournamentId, supabase);
+    if (!eventId) return res.status(404).json({ error: "No TheSportsDB event id could be resolved for this tournament." });
+
+    const tsdbKey = process.env.THE_SPORTS_DB_KEY || "3";
+    const base = `https://www.thesportsdb.com/api/v1/json/${tsdbKey}`;
+    const urls = [
+      `${base}/lookupeventstats.php?id=${encodeURIComponent(eventId)}`,
+      `${base}/lookupevent.php?id=${encodeURIComponent(eventId)}`,
+      `${base}/lookupround.php?id=${encodeURIComponent(eventId)}`,
+    ];
+
+    let players = [];
+    for (const url of urls) {
+      try {
+        const resp = await fetch(url, { timeout: 12000 });
+        if (!resp.ok) continue;
+        const json = await resp.json();
+        const lists = [
+          json?.players,
+          json?.playerstats,
+          json?.eventstats,
+          json?.leaderboard,
+          json?.results,
+        ].filter(Array.isArray);
+        for (const list of lists) {
+          players.push(...list.map((row) => ({
+            name: row.strPlayer || row.player || row.name || row.PlayerName || row.player_name,
+            country: row.strCountry || row.country || row.nationality || null,
+            rank: row.rank || row.intRank || row.position || null,
+          })).filter((p) => p.name));
+        }
+      } catch {}
+    }
+
+    // Deduplicate and import
+    players = players.filter((p) => p.name);
+    if (!players.length) {
+      return res.status(404).json({ error: "No player list found from TheSportsDB for this tournament yet." });
+    }
+
+    const result = await importFieldPlayersIntoTournament(tournamentId, players);
+    if (result?.error) return res.status(400).json({ error: result.error });
+
+    return res.json({
+      imported: result.imported || 0,
+      tournament_id: tournamentId,
+      source: "TheSportsDB",
+      event_id: String(eventId),
+      message: "Auto-imported tournament field from TheSportsDB.",
     });
   } catch (e) {
     return next(e);
