@@ -1089,13 +1089,12 @@ export default function GolfPoolPro() {
     ensureParticipant(acct);
     setCurrentUser(acct.id);
     LS.set("mgpp_session", acct.id);
-    clearHash();
     if(invitePool){
-      joinPool(acct.id, invitePool);
-      notify(`Welcome back, ${acct.name.split(" ")[0]}! You've joined ${invitePool.name}.`);
-      setActivePool(invitePool);
-      setPoolPhase(invitePool.status==="live"?"live":invitePool.status==="complete"?"live":"lobby");
-      setView("pool");
+      setAuthError("");
+      setAuthSuccess(`Logged in as ${acct.name}. Click "Join Pool" below.`);
+      notify(`Welcome back, ${acct.name.split(" ")[0]}!`);
+      setInviteView(true);
+      setView("invite");
     } else {
       notify(`Welcome back, ${acct.name.split(" ")[0]}!`);
       setView("home");
@@ -1116,13 +1115,12 @@ export default function GolfPoolPro() {
     LS.set("mgpp_accounts", updated);
     setCurrentUser(newId);
     LS.set("mgpp_session", newId);
-    clearHash();
     if(invitePool){
-      joinPool(newId, invitePool);
-      notify(`Account created! Welcome, ${authName.split(" ")[0]}! You've joined ${invitePool.name}.`);
-      setActivePool(invitePool);
-      setPoolPhase(invitePool.status==="live"?"live":invitePool.status==="complete"?"live":"lobby");
-      setView("pool");
+      setAuthError("");
+      setAuthSuccess(`Account created. Click "Join Pool" to enter ${invitePool.name}.`);
+      notify(`Welcome to MyGolfPoolPro, ${authName.split(" ")[0]}!`);
+      setInviteView(true);
+      setView("invite");
     } else {
       notify(`Welcome to MyGolfPoolPro, ${authName.split(" ")[0]}!`);
       setView("home");
@@ -1159,6 +1157,26 @@ export default function GolfPoolPro() {
       localStorage.removeItem("mgpp_user");
     } catch {}
     notify("Logged out.");
+  };
+
+  const handleJoinInvitedPool = async () => {
+    if (!currentUser || !invitePool) return;
+    try {
+      // Try backend join when we have a real invite token/session; local-mode fallback below.
+      const token = invitePool.invite_token || invitePool.inviteToken || null;
+      if (token) {
+        try { await Invites.join(token); } catch {}
+      }
+      joinPool(currentUser, invitePool);
+      setActivePool(invitePool);
+      setPoolPhase(invitePool.status==="live"?"live":invitePool.status==="complete"?"live":"lobby");
+      setAuthSuccess("");
+      clearHash();
+      setView("pool");
+      notify(`Joined ${invitePool.name}!`);
+    } catch {
+      setAuthError("Could not join this pool right now. Please try again.");
+    }
   };
 
   // Stats helpers
@@ -2543,8 +2561,8 @@ export default function GolfPoolPro() {
                   <h3 className="h3" style={{marginBottom:6}}>How It Works</h3>
                   <p className="sub" style={{marginBottom:14,fontSize:13}}>When someone clicks your invite link, they'll see a page where they can:</p>
                   {[
-                    ["🔐","Log in to an existing account","Returning players are immediately added to your pool"],
-                    ["✨","Create a new account","New players sign up with name, email & password"],
+                    ["🔐","Log in to an existing account","Returning players log in, then tap Join Pool"],
+                    ["✨","Create a new account","New players sign up, then tap Join Pool"],
                     ["🔑","Reset their password","Forgot password link sends a reset email"],
                   ].map(([i,t,d])=>(
                     <div key={t} style={{display:"flex",gap:12,marginBottom:12,padding:"10px 14px",background:"var(--cream)",borderRadius:10}}>
@@ -2598,7 +2616,7 @@ export default function GolfPoolPro() {
                   </div>
                   {authError && <p style={{color:"var(--red)",fontSize:13,marginBottom:12,fontWeight:600}}>{authError}</p>}
                   <button className="btn btn-gold" style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginBottom:14}} onClick={handleLogin}>
-                    Log In & Join Pool →
+                    Log In
                   </button>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                     <button className="btn-link" style={{fontSize:13}} onClick={()=>{setAuthMode("forgot");setAuthError("");setForgotSent(false);}}>
@@ -2629,7 +2647,7 @@ export default function GolfPoolPro() {
                   </div>
                   {authError && <p style={{color:"var(--red)",fontSize:13,marginBottom:12,fontWeight:600}}>{authError}</p>}
                   <button className="btn btn-gold" style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginBottom:12}} onClick={handleSignup}>
-                    Create Account & Join →
+                    Create Account
                   </button>
                   <p style={{fontSize:11,color:"var(--muted)",textAlign:"center",lineHeight:1.5}}>
                     By creating an account you agree to our Terms of Service and Privacy Policy.
@@ -2669,6 +2687,20 @@ export default function GolfPoolPro() {
                     <button className="btn-link" onClick={()=>setAuthMode("login")}>Return to login</button>
                   </div>
                 </div>
+              )}
+
+              {authMode!=="forgot" && authSuccess && (
+                <p style={{color:"var(--green)",fontSize:13,marginTop:14,fontWeight:700,textAlign:"center"}}>{authSuccess}</p>
+              )}
+
+              {authMode!=="forgot" && currentUser && invitePool && (
+                <button
+                  className="btn btn-prim"
+                  style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginTop:12}}
+                  onClick={handleJoinInvitedPool}
+                >
+                  Join Pool
+                </button>
               )}
             </div>
           </div>
