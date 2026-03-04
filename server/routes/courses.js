@@ -1,13 +1,20 @@
 const router = require("express").Router();
 const fetch = require("node-fetch");
 
-const GOLF_COURSE_API_BASE = (process.env.GOLFCOURSE_API_BASE || "https://api.golfcourseapi.com").replace(/\/$/, "");
+const GOLF_COURSE_API_BASE = (
+  process.env.GOLFCOURSE_API_BASE ||
+  process.env.RAPIDAPI_BASE_URL ||
+  "https://api.golfcourseapi.com"
+).replace(/\/$/, "");
 const GOLF_COURSE_API_KEY = process.env.GOLFCOURSE_API_KEY || "";
+const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY || "";
+const RAPIDAPI_HOST = process.env.RAPIDAPI_HOST || "";
+const COURSE_PROVIDER = RAPIDAPI_KEY ? "rapidapi-golf-course-api" : "golfcourseapi";
 const COURSE_CACHE_TTL_MS = Number(process.env.GOLFCOURSE_CACHE_TTL_MS || 6 * 60 * 60 * 1000); // 6h
-const COURSE_TZ = process.env.GOLFCOURSE_TIMEZONE || "America/New_York";
-const DAILY_LIMIT = Number(process.env.GOLFCOURSE_DAILY_LIMIT || 300);
-const WINDOW_START_HOUR = Number(process.env.GOLFCOURSE_WINDOW_START_HOUR || 8);
-const WINDOW_END_HOUR = Number(process.env.GOLFCOURSE_WINDOW_END_HOUR || 17); // exclusive
+const COURSE_TZ = process.env.RAPIDAPI_TIMEZONE || process.env.GOLFCOURSE_TIMEZONE || "America/New_York";
+const DAILY_LIMIT = Number(process.env.RAPIDAPI_DAILY_LIMIT || process.env.GOLFCOURSE_DAILY_LIMIT || 50);
+const WINDOW_START_HOUR = Number(process.env.RAPIDAPI_WINDOW_START_HOUR || process.env.GOLFCOURSE_WINDOW_START_HOUR || 8);
+const WINDOW_END_HOUR = Number(process.env.RAPIDAPI_WINDOW_END_HOUR || process.env.GOLFCOURSE_WINDOW_END_HOUR || 19); // exclusive
 const WINDOW_DURATION_MS = Math.max(1, WINDOW_END_HOUR - WINDOW_START_HOUR) * 60 * 60 * 1000;
 const MIN_INTERVAL_MS = Math.max(1000, Math.floor(WINDOW_DURATION_MS / Math.max(1, DAILY_LIMIT)));
 const RESPONSE_CACHE = new Map();
@@ -19,8 +26,17 @@ const RATE_STATE = {
 
 function authHeaders() {
   const headers = { Accept: "application/json" };
-  if (GOLF_COURSE_API_KEY) headers.Authorization = `Key ${GOLF_COURSE_API_KEY}`;
+  if (RAPIDAPI_KEY) {
+    headers["x-rapidapi-key"] = RAPIDAPI_KEY;
+    if (RAPIDAPI_HOST) headers["x-rapidapi-host"] = RAPIDAPI_HOST;
+  } else if (GOLF_COURSE_API_KEY) {
+    headers.Authorization = `Key ${GOLF_COURSE_API_KEY}`;
+  }
   return headers;
+}
+
+function hasProviderCreds() {
+  return Boolean(RAPIDAPI_KEY || GOLF_COURSE_API_KEY);
 }
 
 function nowEtParts() {
@@ -121,10 +137,10 @@ async function fetchJson(url) {
   if (!gate.ok) {
     const err = new Error(
       gate.reason === "outside_window"
-        ? `GolfCourseAPI calls are allowed only between ${WINDOW_START_HOUR}:00-${WINDOW_END_HOUR}:00 ${COURSE_TZ}.`
+        ? `${COURSE_PROVIDER} calls are allowed only between ${WINDOW_START_HOUR}:00-${WINDOW_END_HOUR}:00 ${COURSE_TZ}.`
         : gate.reason === "daily_limit"
-          ? `GolfCourseAPI daily limit reached (${DAILY_LIMIT} calls).`
-          : "GolfCourseAPI call deferred to keep calls evenly spaced."
+          ? `${COURSE_PROVIDER} daily limit reached (${DAILY_LIMIT} calls).`
+          : `${COURSE_PROVIDER} call deferred to keep calls evenly spaced.`
     );
     err.status = 429;
     err.retryAfterSeconds = Math.max(1, Math.ceil((gate.retryAfterMs || 1000) / 1000));
@@ -136,7 +152,7 @@ async function fetchJson(url) {
   registerCall();
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
-    throw new Error(`GolfCourseAPI ${resp.status}: ${text || resp.statusText}`);
+    throw new Error(`${COURSE_PROVIDER} ${resp.status}: ${text || resp.statusText}`);
   }
   const payload = await resp.json();
   RESPONSE_CACHE.set(url, { payload, expiresAt: Date.now() + COURSE_CACHE_TTL_MS });
@@ -146,6 +162,7 @@ async function fetchJson(url) {
 async function searchCourses(query) {
   const q = encodeURIComponent(query);
   const urls = [
+    `${GOLF_COURSE_API_BASE}/search?name=${q}`,
     `${GOLF_COURSE_API_BASE}/v1/courses?search=${q}`,
     `${GOLF_COURSE_API_BASE}/v1/courses?q=${q}`,
     `${GOLF_COURSE_API_BASE}/v1/courses?name=${q}`,
@@ -185,10 +202,12 @@ router.get("/search", async (req, res, next) => {
   try {
     const q = String(req.query.q || "").trim();
     if (!q) return res.status(400).json({ error: "Missing query string `q`." });
-    if (!GOLF_COURSE_API_KEY) return res.status(400).json({ error: "GOLFCOURSE_API_KEY is not configured." });
+    if (!hasProviderCreds()) {
+      return res.status(400).json({ error: "Set RAPIDAPI_KEY (+ RAPIDAPI_HOST) or GOLFCOURSE_API_KEY." });
+    }
 
     const courses = await searchCourses(q);
-    return res.json({ courses, provider: "golfcourseapi", count: courses.length });
+    return res.json({ courses, provider: COURSE_PROVIDER, count: courses.length });
   } catch (e) {
     if (e.status === 429) {
       res.setHeader("Retry-After", String(e.retryAfterSeconds || 60));
@@ -200,7 +219,9 @@ router.get("/search", async (req, res, next) => {
 
 router.get("/tournament/:id", async (req, res, next) => {
   try {
-    if (!GOLF_COURSE_API_KEY) return res.status(400).json({ error: "GOLFCOURSE_API_KEY is not configured." });
+    if (!hasProviderCreds()) {
+      return res.status(400).json({ error: "Set RAPIDAPI_KEY (+ RAPIDAPI_HOST) or GOLFCOURSE_API_KEY." });
+    }
     const sb = req.app.locals.supabase;
     const { data: tournament, error } = await sb
       .from("tournaments")
@@ -217,12 +238,12 @@ router.get("/tournament/:id", async (req, res, next) => {
           tournament,
           course: matches[0],
           candidates: matches.slice(0, 5),
-          provider: "golfcourseapi",
+          provider: COURSE_PROVIDER,
         });
       }
     }
 
-    return res.json({ tournament, course: null, candidates: [], provider: "golfcourseapi" });
+    return res.json({ tournament, course: null, candidates: [], provider: COURSE_PROVIDER });
   } catch (e) {
     if (e.status === 429) {
       res.setHeader("Retry-After", String(e.retryAfterSeconds || 60));
@@ -234,10 +255,12 @@ router.get("/tournament/:id", async (req, res, next) => {
 
 router.get("/:id", async (req, res, next) => {
   try {
-    if (!GOLF_COURSE_API_KEY) return res.status(400).json({ error: "GOLFCOURSE_API_KEY is not configured." });
+    if (!hasProviderCreds()) {
+      return res.status(400).json({ error: "Set RAPIDAPI_KEY (+ RAPIDAPI_HOST) or GOLFCOURSE_API_KEY." });
+    }
     const course = await getCourseById(req.params.id);
     if (!course) return res.status(404).json({ error: "Course not found." });
-    return res.json({ course, provider: "golfcourseapi" });
+    return res.json({ course, provider: COURSE_PROVIDER });
   } catch (e) {
     if (e.status === 429) {
       res.setHeader("Retry-After", String(e.retryAfterSeconds || 60));

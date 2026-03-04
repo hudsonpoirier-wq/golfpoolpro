@@ -36,6 +36,15 @@ GOLFCOURSE_TIMEZONE=America/New_York
 GOLFCOURSE_WINDOW_START_HOUR=8
 GOLFCOURSE_WINDOW_END_HOUR=17
 GOLFCOURSE_CACHE_TTL_MS=21600000
+
+# RapidAPI mode (preferred if you subscribed there)
+RAPIDAPI_KEY=your-rapidapi-key
+RAPIDAPI_HOST=golf-course-api.p.rapidapi.com
+RAPIDAPI_BASE_URL=https://golf-course-api.p.rapidapi.com
+RAPIDAPI_DAILY_LIMIT=50
+RAPIDAPI_TIMEZONE=America/New_York
+RAPIDAPI_WINDOW_START_HOUR=8
+RAPIDAPI_WINDOW_END_HOUR=19
 ```
 
 3. Start website (frontend + backend):
