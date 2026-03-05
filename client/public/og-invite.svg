@@ -48,8 +48,8 @@
       <path d="M38,77.5 Q41,83 38,88" stroke="#ccc" stroke-width="0.7" fill="none" stroke-linecap="round"/>
       <path d="M44,77.5 Q41,83 44,88" stroke="#ccc" stroke-width="0.7" fill="none" stroke-linecap="round"/>
     </g>
-    <text x="250" y="174" font-family="Playfair Display, Georgia, serif" font-size="118" font-weight="700" letter-spacing="0.5" fill="#ffffff">My</text>
-    <text x="424" y="174" font-family="Playfair Display, Georgia, serif" font-size="118" font-weight="700" letter-spacing="0.5" fill="url(#gg)">Golf</text>
-    <text x="740" y="174" font-family="Playfair Display, Georgia, serif" font-size="118" font-weight="700" letter-spacing="0.5" fill="#ffffff">PoolPro</text>
+    <text x="250" y="174" font-family="Playfair Display, Georgia, serif" font-size="118" font-weight="700" letter-spacing="0.2" fill="#ffffff">My</text>
+    <text x="410" y="174" font-family="Playfair Display, Georgia, serif" font-size="118" font-weight="700" letter-spacing="0.2" fill="url(#gg)">Golf</text>
+    <text x="690" y="174" font-family="Playfair Display, Georgia, serif" font-size="118" font-weight="700" letter-spacing="0.2" fill="#ffffff">PoolPro</text>
   </g>
 </svg>

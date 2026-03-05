@@ -31,6 +31,19 @@
           "value": "public, max-age=300"
         }
       ]
+    },
+    {
+      "source": "/og-invite-v3.png",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "image/png"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=300"
+        }
+      ]
     }
   ]
 }
