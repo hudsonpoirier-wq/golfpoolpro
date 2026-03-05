@@ -32,6 +32,8 @@ html,body{background:var(--cream);color:var(--text);font-family:'DM Sans',sans-s
 .nav{background:var(--forest);height:60px;display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:300;box-shadow:0 2px 20px rgba(0,0,0,.2)}
 .logo{font-family:'Cormorant Garamond',serif;font-size:20px;font-weight:700;color:var(--gold);cursor:pointer;letter-spacing:.2px}
 .logo em{color:#fff;font-style:normal}
+.logo-btn{display:inline-flex;align-items:center;justify-content:center;background:transparent;border:none;cursor:pointer;padding:0}
+.logo-icon{width:34px;height:42px;display:block}
 .nav-links{display:flex;gap:2px}
 .ntab{padding:6px 13px;border-radius:7px;border:none;background:transparent;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;color:rgba(255,255,255,.5);cursor:pointer;transition:all .16s}
 .ntab:hover{color:#fff;background:rgba(255,255,255,.08)}
@@ -98,6 +100,7 @@ select.inp{cursor:pointer}
 .hero-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 14px;border-radius:20px;background:rgba(200,169,79,.14);border:1px solid rgba(200,169,79,.28);color:var(--gold);font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:20px}
 .hero-title{font-family:'Cormorant Garamond',serif;font-size:60px;font-weight:700;color:#fff;line-height:1.06;margin-bottom:16px}
 .hero-title span{color:var(--gold)}
+.hero-logo{width:100%;max-width:560px;height:auto;display:block;margin:0 auto 16px}
 .hero-sub{font-size:16px;color:rgba(255,255,255,.62);max-width:540px;margin:0 auto 36px;line-height:1.65}
 
 /* POOL CARD */
@@ -1739,7 +1742,9 @@ export default function GolfPoolPro() {
         {view!=="invite" && (
           <>
           <nav className="nav">
-            <div className="logo" onClick={()=>{setView("home");setActivePool(null);}}>My<em>Golf</em><span style={{color:"var(--gold)"}}>PoolPro</span></div>
+            <button className="logo-btn" type="button" onClick={()=>{setView("home");setActivePool(null);}} aria-label="MyGolfPoolPro home">
+              <img className="logo-icon" src="/logo-icon.svg" alt="MyGolfPoolPro icon" />
+            </button>
             <div className="nav-links">
               {[["home","🏠 My Pools"]].map(([v,l])=>(
                 <button key={v} className={`ntab ${view===v||view==="pool"||view==="admin"?"on":""}`} onClick={()=>{setView("home");setActivePool(null);}}>
@@ -1826,7 +1831,7 @@ export default function GolfPoolPro() {
           <div>
             <div className="hero">
               <div style={{position:"relative",zIndex:1}}>
-                <h1 className="hero-title">My<span>Golf</span>PoolPro</h1>
+                <img className="hero-logo" src="/logo-primary-dark.svg" alt="MyGolfPoolPro" />
                 <p className="hero-sub">Your premier platform for high-stakes golf pool competitions. Draft smarter, track deeper, win bigger.</p>
               </div>
             </div>
@@ -2143,7 +2148,6 @@ export default function GolfPoolPro() {
                             <span className="link-txt" title={buildInviteUrl(activePool)}>{compactInviteUrl(activePool)}</span>
                             <div style={{display:"flex",gap:6,flexShrink:0}}>
                               <button className="btn btn-ghost btn-sm" onClick={()=>copyLink(buildInviteUrl(activePool))}>Copy</button>
-                              <button className="btn btn-prim btn-sm" onClick={()=>openInvite(activePool)}>Preview</button>
                             </div>
                           </div>
                         </>
@@ -3202,7 +3206,6 @@ export default function GolfPoolPro() {
                     </span>
                     <div style={{display:"flex",gap:6,flexShrink:0}}>
                       <button className="btn btn-ghost btn-sm" onClick={()=>copyLink(activePool ? buildInviteUrl(activePool) : createFlowInviteUrl)}>📋 Copy</button>
-                      <button className="btn btn-prim btn-sm" onClick={()=>openInvite(activePool || null)}>👁️ Preview</button>
                     </div>
                   </div>
                   <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>

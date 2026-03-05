@@ -1,13 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="MyGolfPoolPro Invite">
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="280" viewBox="0 0 1180 280" role="img" aria-label="MyGolfPoolPro logo">
   <defs>
-    <radialGradient id="bga" cx="20%" cy="80%" r="70%">
-      <stop offset="0%" stop-color="#1f4f38" stop-opacity="0.35"/>
-      <stop offset="100%" stop-color="#0a1f16" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#071a12"/>
-      <stop offset="100%" stop-color="#123625"/>
-    </linearGradient>
     <radialGradient id="sg" cx="50%" cy="35%" r="65%">
       <stop offset="0%" stop-color="#2e6644"/>
       <stop offset="100%" stop-color="#0e2b1a"/>
@@ -17,7 +9,7 @@
       <stop offset="50%" stop-color="#c9a227"/>
       <stop offset="100%" stop-color="#9a7510"/>
     </linearGradient>
-    <linearGradient id="bg2" x1="0%" y1="0%" x2="0%" y2="100%">
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
       <stop offset="0%" stop-color="#e8c96a"/>
       <stop offset="100%" stop-color="#7a5c08"/>
     </linearGradient>
@@ -25,12 +17,9 @@
       <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.35"/>
     </filter>
   </defs>
-  <rect width="1200" height="630" fill="url(#bg)"/>
-  <rect width="1200" height="630" fill="url(#bga)"/>
-  <rect x="55" y="108" width="1090" height="414" rx="22" fill="#132a1c" stroke="#1e3d28"/>
-  <g transform="translate(110,168)">
-    <g transform="translate(0,0) scale(2.3)">
-      <path d="M5,5 L89,5 L94,10 L94,68 Q94,100 47,112 Q0,100 0,68 L0,10 Z" fill="url(#bg2)" filter="url(#ds)"/>
+  <g transform="translate(26,26)">
+    <g transform="translate(0,0) scale(1.6)">
+      <path d="M5,5 L89,5 L94,10 L94,68 Q94,100 47,112 Q0,100 0,68 L0,10 Z" fill="url(#bg)" filter="url(#ds)"/>
       <path d="M7,9 L87,9 L91,13 L91,68 Q91,97 47,108 Q3,97 3,68 L3,13 Z" fill="url(#sg)"/>
       <path d="M11,17 L83,17 L86,20 L86,67 Q86,92 47,102 Q8,92 8,67 L8,20 Z" fill="none" stroke="url(#gg)" stroke-width="1" opacity="0.35"/>
       <circle cx="29" cy="28" r="1.5" fill="url(#gg)" opacity="0.7"/>
@@ -48,10 +37,10 @@
       <path d="M38,77.5 Q41,83 38,88" stroke="#ccc" stroke-width="0.7" fill="none" stroke-linecap="round"/>
       <path d="M44,77.5 Q41,83 44,88" stroke="#ccc" stroke-width="0.7" fill="none" stroke-linecap="round"/>
     </g>
-    <text x="260" y="164" font-family="Playfair Display, Georgia, serif" font-size="112" font-weight="700" fill="#ffffff">My</text>
-    <text x="425" y="164" font-family="Playfair Display, Georgia, serif" font-size="112" font-weight="700" fill="url(#gg)">Golf</text>
-    <text x="648" y="164" font-family="Playfair Display, Georgia, serif" font-size="112" font-weight="700" fill="#ffffff">PoolPro</text>
-    <line x1="260" y1="194" x2="1030" y2="194" stroke="url(#gg)" stroke-width="2" opacity="0.8"/>
-    <text x="450" y="234" font-family="Montserrat, Arial, sans-serif" font-size="26" letter-spacing="8" font-weight="600" fill="#7aaa8e">DRAFT · TRACK · WIN</text>
+    <text x="205" y="124" font-family="Playfair Display, Georgia, serif" font-size="98" font-weight="700" fill="#ffffff">My</text>
+    <text x="355" y="124" font-family="Playfair Display, Georgia, serif" font-size="98" font-weight="700" fill="url(#gg)">Golf</text>
+    <text x="548" y="124" font-family="Playfair Display, Georgia, serif" font-size="98" font-weight="700" fill="#ffffff">PoolPro</text>
+    <line x1="205" y1="148" x2="1010" y2="148" stroke="url(#gg)" stroke-width="2" opacity="0.8"/>
+    <text x="414" y="182" font-family="Montserrat, Arial, sans-serif" font-size="26" letter-spacing="8" font-weight="600" fill="#7aaa8e">DRAFT · TRACK · WIN</text>
   </g>
 </svg>
