@@ -70,6 +70,10 @@ SPORTRADAR_GOLF_FIELD_URL_TEMPLATE=
 # BallDontLie PGA (recommended primary for free-tier schedules + players)
 BALLDONTLIE_PGA_KEY=your-balldontlie-key
 BALLDONTLIE_PGA_BASE_URL=https://api.balldontlie.io/pga/v1
+
+# Optional score provider override:
+# BALLDONTLIE (default when key exists), THESPORTSDB, or SPORTSDATAIO
+SCORE_PROVIDER=BALLDONTLIE
 ```
 
 3. Start website (frontend + backend):
@@ -115,3 +119,6 @@ VITE_SITE_URL=https://golfpoolpro.vercel.app
   - If enabled, backend also compares SportsDataIO counts.
   - It seeds from whichever provider returns more upcoming events.
   - If future tournament rows are low, `/api/tournaments/future` auto-backfills.
+- Live score behavior:
+  - If `BALLDONTLIE_PGA_KEY` is set, live sync tries BallDontLie first.
+  - If BallDontLie has no usable leaderboard data, it falls back to TheSportsDB, then SportsDataIO (if enabled).

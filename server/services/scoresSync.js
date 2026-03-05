@@ -6,11 +6,16 @@ const fetch = require("node-fetch");  // npm install node-fetch@2
 
 const SPORTS_DATA_KEY = process.env.SPORTS_DATA_IO_KEY;
 const SPORTS_DATA_BASE = "https://api.sportsdata.io/golf/v2/json";
+const BALLDONTLIE_PGA_KEY = process.env.BALLDONTLIE_PGA_KEY || process.env.BALLDONTLIE_API_KEY || "";
+const BALLDONTLIE_PGA_BASE = (process.env.BALLDONTLIE_PGA_BASE_URL || "https://api.balldontlie.io/pga/v1").replace(/\/+$/, "");
 
 // Alternative free API (no key required, less detail):
 const THE_SPORTS_DB_KEY = process.env.THE_SPORTS_DB_KEY || "3";
 const THE_SPORTS_DB = `https://www.thesportsdb.com/api/v1/json/${THE_SPORTS_DB_KEY}`;
-const SCORE_PROVIDER = (process.env.SCORE_PROVIDER || "THESPORTSDB").toUpperCase();
+const SCORE_PROVIDER = (
+  process.env.SCORE_PROVIDER ||
+  (BALLDONTLIE_PGA_KEY ? "BALLDONTLIE" : "THESPORTSDB")
+).toUpperCase();
 const USE_SPORTSDATAIO = String(process.env.USE_SPORTSDATAIO || "").toLowerCase() === "true";
 const AUTO_EVENT_MAP = {};
 
@@ -52,6 +57,19 @@ async function syncLiveScores(supabase) {
       const scores = await fetchScores(tournament.id, supabase);
       if (!scores?.length) continue;
 
+      const golferRows = scores
+        .filter((s) => Number.isFinite(Number(s.golferId)) && s.playerName)
+        .map((s) => ({
+          id: Number(s.golferId),
+          name: String(s.playerName || "").trim(),
+          country: s.country || null,
+          updated_at: new Date().toISOString(),
+        }))
+        .filter((g) => g.id > 0 && g.name);
+      if (golferRows.length) {
+        await supabase.from("golfers").upsert(golferRows, { onConflict: "id" });
+      }
+
       // Upsert scores in bulk
       const rows = scores.map(s => ({
         tournament_id: tournament.id,
@@ -80,6 +98,13 @@ async function syncLiveScores(supabase) {
 }
 
 async function fetchScores(internalTournamentId, supabase) {
+  if (SCORE_PROVIDER === "BALLDONTLIE") {
+    const bdl = await fetchBallDontLieScores(internalTournamentId, supabase);
+    if (bdl?.length) return bdl;
+    const tsdbFallback = await fetchTheSportsDbScores(internalTournamentId, supabase);
+    if (tsdbFallback?.length) return tsdbFallback;
+    return USE_SPORTSDATAIO ? fetchSportsDataScores(internalTournamentId) : null;
+  }
   if (USE_SPORTSDATAIO && SCORE_PROVIDER === "SPORTSDATAIO") {
     const sportsData = await fetchSportsDataScores(internalTournamentId);
     if (sportsData?.length) return sportsData;
@@ -106,6 +131,8 @@ function normalizeScoreRow(raw) {
 
   return {
     golferId: Number(raw.golferId || raw.idPlayer || raw.PlayerID || raw.player_id),
+    playerName: raw.playerName || raw.strPlayer || raw.name || raw.player?.name || [raw.first_name, raw.last_name].filter(Boolean).join(" ") || null,
+    country: raw.country || raw.nationality || raw.player?.country || null,
     position: Number(rankRaw) || 999,
     r1: Number.isFinite(r1) ? r1 : null,
     r2: Number.isFinite(r2) ? r2 : null,
@@ -218,6 +245,111 @@ async function fetchTheSportsDbScores(internalTournamentId, supabase) {
     } catch {}
   }
 
+  return null;
+}
+
+async function resolveBallDontLieTournamentId(internalTournamentId, supabase) {
+  const explicit = String(internalTournamentId || "").match(/^bdl_(\d+)$/i);
+  if (explicit) return explicit[1];
+  if (!supabase || !BALLDONTLIE_PGA_KEY) return null;
+
+  const { data: tournament } = await supabase
+    .from("tournaments")
+    .select("name, start_date")
+    .eq("id", internalTournamentId)
+    .single();
+  if (!tournament?.name || !tournament?.start_date) return null;
+
+  const year = String(tournament.start_date).slice(0, 4);
+  const url = `${BALLDONTLIE_PGA_BASE}/tournaments?season=${encodeURIComponent(year)}&per_page=100`;
+  try {
+    const resp = await fetch(url, { headers: { Authorization: BALLDONTLIE_PGA_KEY }, timeout: 12000 });
+    if (!resp.ok) return null;
+    const json = await resp.json();
+    const events = Array.isArray(json?.data) ? json.data : [];
+    if (!events.length) return null;
+    const targetName = normalizeName(tournament.name);
+    let best = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (const ev of events) {
+      const nameScore = normalizeName(ev.name).includes(targetName) || targetName.includes(normalizeName(ev.name)) ? 0 : 25;
+      const dateScore = dateDistanceDays(tournament.start_date, ev.start_date || ev.startDate || ev.date);
+      const score = nameScore + dateScore;
+      if (score < bestScore) {
+        bestScore = score;
+        best = ev;
+      }
+    }
+    return best?.id ? String(best.id) : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeBallDontLieScoreRow(raw) {
+  if (!raw) return null;
+  const player = raw.player || raw.golfer || raw.athlete || {};
+  const rounds = Array.isArray(raw.rounds) ? raw.rounds : Array.isArray(raw.scores) ? raw.scores : [];
+  const r = (idx) => {
+    const v = rounds[idx];
+    if (v == null) return null;
+    if (typeof v === "number") return v;
+    return Number(v.score ?? v.strokes ?? v.to_par ?? v.total ?? null);
+  };
+  const position = Number(raw.position ?? raw.rank ?? raw.place ?? raw.standing ?? raw.order ?? 999) || 999;
+  const golferId = Number(raw.player_id ?? player.id ?? raw.idPlayer ?? raw.id);
+  const playerName = [player.first_name, player.last_name].filter(Boolean).join(" ")
+    || player.name
+    || raw.player_name
+    || raw.name
+    || null;
+  const toPar = Number(raw.to_par ?? raw.score_to_par ?? raw.total_to_par ?? raw.score ?? null);
+
+  if (!Number.isFinite(golferId) || !playerName) return null;
+  return {
+    golferId,
+    playerName,
+    country: player.country || raw.country || null,
+    position,
+    r1: Number.isFinite(r(0)) ? r(0) : null,
+    r2: Number.isFinite(r(1)) ? r(1) : null,
+    r3: Number.isFinite(r(2)) ? r(2) : null,
+    r4: Number.isFinite(r(3)) ? r(3) : (Number.isFinite(toPar) ? toPar : null),
+    birdies: [0, 0, 0, 0],
+    eagles: [0, 0, 0, 0],
+    bogeys: [0, 0, 0, 0],
+  };
+}
+
+async function fetchBallDontLieScores(internalTournamentId, supabase) {
+  if (!BALLDONTLIE_PGA_KEY) return null;
+  const tournamentId = await resolveBallDontLieTournamentId(internalTournamentId, supabase);
+  if (!tournamentId) return null;
+
+  const headers = { Authorization: BALLDONTLIE_PGA_KEY };
+  const urls = [
+    `${BALLDONTLIE_PGA_BASE}/leaderboards?tournament_id=${encodeURIComponent(tournamentId)}&per_page=200`,
+    `${BALLDONTLIE_PGA_BASE}/tournaments/${encodeURIComponent(tournamentId)}/leaderboard`,
+    `${BALLDONTLIE_PGA_BASE}/leaderboards/${encodeURIComponent(tournamentId)}`,
+  ];
+
+  for (const url of urls) {
+    try {
+      const resp = await fetch(url, { headers, timeout: 12000 });
+      if (!resp.ok) continue;
+      const json = await resp.json();
+      const lists = [
+        json?.data,
+        json?.leaderboard,
+        json?.results,
+        json?.entries,
+      ].filter(Array.isArray);
+      for (const list of lists) {
+        const rows = list.map(normalizeBallDontLieScoreRow).filter(Boolean);
+        if (rows.length) return rows;
+      }
+    } catch {}
+  }
   return null;
 }
 
