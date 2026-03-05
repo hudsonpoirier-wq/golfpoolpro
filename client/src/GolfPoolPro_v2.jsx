@@ -671,6 +671,7 @@ export default function GolfPoolPro() {
   const [forgotSent,setForgotSent] = useState(false);
   const [authBusy,setAuthBusy] = useState(false);
   const [readyBusyMap,setReadyBusyMap] = useState({});
+  const [deleteBusy,setDeleteBusy] = useState(false);
   const [resetPass,setResetPass] = useState("");
   const [resetPassConfirm,setResetPassConfirm] = useState("");
 
@@ -1904,14 +1905,74 @@ export default function GolfPoolPro() {
                 confirmDelete ? (
                   <div style={{display:"flex",alignItems:"center",gap:8,background:"rgba(220,38,38,.15)",border:"1px solid rgba(220,38,38,.4)",borderRadius:10,padding:"8px 12px"}}>
                     <span style={{fontSize:12,color:"#FCA5A5",fontWeight:600}}>Delete this pool?</span>
-                    <button onClick={()=>{
-                      setPools(ps=>ps.filter(p=>p.id!==activePool.id));
-                      setActivePool(null);
-                      setView("home");
-                      setConfirmDelete(false);
-                      notify("Pool deleted.","success");
-                    }} style={{padding:"4px 12px",borderRadius:7,border:"none",background:"#DC2626",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}}>
-                      Yes, Delete
+                    <button onClick={async ()=>{
+                      if (deleteBusy || !activePool?.id) return;
+                      const deletedId = activePool.id;
+                      setDeleteBusy(true);
+                      try {
+                        if (!apiToken.get()) throw new Error("Session expired. Please log in again.");
+                        await Pools.delete(deletedId);
+
+                        setPools(ps=>ps.filter(p=>p.id!==deletedId));
+                        setPoolMembers((m) => {
+                          const copy = { ...m };
+                          delete copy[deletedId];
+                          return copy;
+                        });
+                        setAllDrafted((d) => {
+                          const copy = { ...d };
+                          delete copy[deletedId];
+                          return copy;
+                        });
+                        setPoolReadyMap({});
+
+                        try {
+                          const cachedPools = LS.get("mgpp_pools", []).filter((p) => p.id !== deletedId);
+                          LS.set("mgpp_pools", cachedPools);
+                          const cachedMembers = LS.get("mgpp_members", {});
+                          delete cachedMembers[deletedId];
+                          LS.set("mgpp_members", cachedMembers);
+                          const cachedPicks = LS.get("mgpp_picks", {});
+                          delete cachedPicks[deletedId];
+                          LS.set("mgpp_picks", cachedPicks);
+                        } catch {}
+
+                        const resp = await Pools.list();
+                        const mapped = (resp?.pools || []).map((p) => ({
+                          id: p.id,
+                          name: p.name,
+                          status: p.status || "lobby",
+                          tournamentId: p.tournament?.id || p.tournament_id || "",
+                          tournamentName: p.tournament?.name || "",
+                          participants: Number(p.participants || 0),
+                          maxParticipants: Number(p.max_participants || p.maxParticipants || 8),
+                          teamSize: Number(p.team_size || p.teamSize || 4),
+                          scoringGolfers: Number(p.scoring_golfers || p.scoringGolfers || 2),
+                          cutLine: Number(p.cut_line || p.cutLine || 2),
+                          shotClock: Number(p.shot_clock || p.shotClock || 60),
+                          draftOrderType: p.draft_order_type || p.draftOrderType || "ordered",
+                          invite_token: p.invite_token || null,
+                          hostId: p.host_id || null,
+                          yourRank: p.yourRank ?? null,
+                          yourScore: p.yourScore ?? null,
+                          created: p.created_at ? new Date(p.created_at).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"}),
+                        }));
+                        if (mapped.some((p) => p.id === deletedId)) {
+                          throw new Error("Server still returned this pool after deletion. Please refresh and try again.");
+                        }
+                        setPools(mapped);
+
+                        setActivePool(null);
+                        setView("home");
+                        setConfirmDelete(false);
+                        notify("Pool deleted.","success");
+                      } catch (e) {
+                        notify(e?.message || "Could not delete pool.", "error");
+                      } finally {
+                        setDeleteBusy(false);
+                      }
+                    }} disabled={deleteBusy} style={{padding:"4px 12px",borderRadius:7,border:"none",background:"#DC2626",color:"#fff",fontSize:12,fontWeight:700,cursor:deleteBusy?"not-allowed":"pointer",opacity:deleteBusy?0.75:1}}>
+                      {deleteBusy ? "Deleting..." : "Yes, Delete"}
                     </button>
                     <button onClick={()=>setConfirmDelete(false)} style={{padding:"4px 10px",borderRadius:7,border:"1px solid rgba(255,255,255,.2)",background:"transparent",color:"rgba(255,255,255,.6)",fontSize:12,cursor:"pointer"}}>
                       Cancel

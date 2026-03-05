@@ -176,8 +176,24 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     if (!pool) return res.status(404).json({ error: "Pool not found." });
     if (pool.host_id !== req.user.id) return res.status(403).json({ error: "Only the host can delete this pool." });
 
-    await sb.from("pools").delete().eq("id", id);
-    res.json({ message: "Pool deleted." });
+    // Best-effort cleanup so deletion behaves consistently even if a FK/cascade
+    // is missing in an older schema revision.
+    const { error: pickErr } = await sb.from("draft_picks").delete().eq("pool_id", id);
+    if (pickErr) return res.status(400).json({ error: pickErr.message || "Could not delete pool picks." });
+
+    const { error: memberErr } = await sb.from("pool_members").delete().eq("pool_id", id);
+    if (memberErr) return res.status(400).json({ error: memberErr.message || "Could not delete pool members." });
+
+    const { data: deleted, error: delErr } = await sb
+      .from("pools")
+      .delete()
+      .eq("id", id)
+      .select("id")
+      .single();
+    if (delErr) return res.status(400).json({ error: delErr.message || "Could not delete pool." });
+    if (!deleted?.id) return res.status(500).json({ error: "Pool deletion was not confirmed." });
+
+    res.json({ message: "Pool deleted.", id: deleted.id });
   } catch (e) { next(e); }
 });
 
