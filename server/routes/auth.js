@@ -63,7 +63,7 @@ router.post("/signup", async (req, res, next) => {
       .from("profiles")
       .select("name, avatar")
       .eq("id", created.user.id)
-      .single();
+      .maybeSingle();
 
     res.status(201).json({
       user: {
