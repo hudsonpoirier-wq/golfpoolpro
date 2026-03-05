@@ -22,7 +22,22 @@ router.get("/future", async (_req, res, next) => {
       if (!rerun.error) data = rerun.data || data;
     }
 
-    res.json({ tournaments: data || [] });
+    const providerRank = (id) => {
+      if (String(id || "").startsWith("bdl_")) return 3;
+      if (String(id || "").startsWith("sdio_")) return 2;
+      if (String(id || "").startsWith("tsdb_")) return 1;
+      return 0;
+    };
+    const dedupedMap = new Map();
+    for (const t of (data || [])) {
+      const key = `${String(t.name || "").trim().toLowerCase()}|${String(t.start_date || "")}`;
+      const current = dedupedMap.get(key);
+      if (!current || providerRank(t.id) > providerRank(current.id)) dedupedMap.set(key, t);
+    }
+    const deduped = Array.from(dedupedMap.values())
+      .sort((a, b) => String(a.start_date || "").localeCompare(String(b.start_date || "")));
+
+    res.json({ tournaments: deduped });
   } catch (e) {
     next(e);
   }

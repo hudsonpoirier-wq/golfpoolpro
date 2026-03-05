@@ -3,6 +3,8 @@ const fetch = require("node-fetch");
 const SPORTS_DATA_KEY = process.env.SPORTS_DATA_IO_KEY;
 const SPORTS_DATA_BASE = "https://api.sportsdata.io/golf/v2/json";
 const USE_SPORTSDATAIO = String(process.env.USE_SPORTSDATAIO || "").toLowerCase() === "true";
+const BALLDONTLIE_PGA_KEY = process.env.BALLDONTLIE_PGA_KEY || process.env.BALLDONTLIE_API_KEY || "";
+const BALLDONTLIE_PGA_BASE = (process.env.BALLDONTLIE_PGA_BASE_URL || "https://api.balldontlie.io/pga/v1").replace(/\/+$/, "");
 
 const THE_SPORTS_DB_KEY = process.env.THE_SPORTS_DB_KEY || "3";
 const THE_SPORTS_DB = `https://www.thesportsdb.com/api/v1/json/${THE_SPORTS_DB_KEY}`;
@@ -135,6 +137,48 @@ async function fetchTheSportsDbTournaments(year, today) {
   return out;
 }
 
+async function fetchBallDontLieTournaments(year, today) {
+  if (!BALLDONTLIE_PGA_KEY) return [];
+
+  const headers = { Authorization: BALLDONTLIE_PGA_KEY };
+  const urls = [
+    `${BALLDONTLIE_PGA_BASE}/tournaments?season=${encodeURIComponent(String(year))}&per_page=100`,
+    `${BALLDONTLIE_PGA_BASE}/tournaments?seasons[]=${encodeURIComponent(String(year))}&per_page=100`,
+  ];
+
+  for (const url of urls) {
+    try {
+      const resp = await fetch(url, { headers, timeout: 12000 });
+      if (!resp.ok) continue;
+      const json = await resp.json();
+      const items = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
+      if (!items.length) continue;
+
+      const rows = items
+        .map((t) => {
+          const start = asDateOnly(t.start_date || t.startDate || t.date || t.starts_at);
+          if (!start || start < today) return null;
+          const idRaw = t.id || t.tournament_id || t.event_id;
+          if (!idRaw) return null;
+          const end = asDateOnly(t.end_date || t.endDate || t.ends_at) || plusDays(start, 3);
+          return {
+            id: `bdl_${idRaw}`,
+            name: t.name || t.tournament || t.event_name || `Tournament ${idRaw}`,
+            venue: t.venue || t.course || t.location || null,
+            start_date: start,
+            end_date: end,
+            purse: t.purse || t.total_purse || null,
+            field_size: Number(t.field_size || t.fieldSize || t.players_count || 0) || null,
+            status: start > today ? "upcoming" : "active",
+          };
+        })
+        .filter(Boolean);
+      if (rows.length) return rows;
+    } catch {}
+  }
+  return [];
+}
+
 function pickBestSource(sourceRows) {
   const sorted = Object.entries(sourceRows)
     .map(([provider, rows]) => ({ provider, rows: rows || [], count: (rows || []).length }))
@@ -149,13 +193,16 @@ async function seedUpcomingTournaments(supabase, year = new Date().getUTCFullYea
 
   const sportsDataRows = [];
   const theSportsDbRows = [];
+  const ballDontLieRows = [];
   for (const y of years) {
     sportsDataRows.push(...(await fetchSportsDataTournaments(y, today)));
     theSportsDbRows.push(...(await fetchTheSportsDbTournaments(y, today)));
+    ballDontLieRows.push(...(await fetchBallDontLieTournaments(y, today)));
   }
   const templateRows = normalizeTemplate(year, today);
 
   const { best, counts } = pickBestSource({
+    ...(BALLDONTLIE_PGA_KEY ? { BALLDONTLIE: ballDontLieRows } : {}),
     ...(USE_SPORTSDATAIO ? { SPORTSDATAIO: sportsDataRows } : {}),
     THESPORTSDB: theSportsDbRows,
     TEMPLATE: templateRows,

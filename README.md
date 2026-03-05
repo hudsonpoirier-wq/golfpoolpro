@@ -66,6 +66,10 @@ SPORTRADAR_TOURNAMENT_MAP={}
 # Optional custom field URL template:
 # placeholders: {id} {sportradar_tournament_id} {api_key} {access_level} {version} {language}
 SPORTRADAR_GOLF_FIELD_URL_TEMPLATE=
+
+# BallDontLie PGA (recommended primary for free-tier schedules + players)
+BALLDONTLIE_PGA_KEY=your-balldontlie-key
+BALLDONTLIE_PGA_BASE_URL=https://api.balldontlie.io/pga/v1
 ```
 
 3. Start website (frontend + backend):
@@ -99,14 +103,15 @@ VITE_SITE_URL=https://golfpoolpro.vercel.app
   - `GET /api/courses/tournament/:id`
 - Admin field import endpoint:
   - `POST /api/admin/import-field/:tournamentId` with `x-admin-token`
-  - `POST /api/admin/import-field-auto/:tournamentId` (provider chain: Sportradar -> TheSportsDB -> RapidAPI)
+  - `POST /api/admin/import-field-auto/:tournamentId` (provider chain: Sportradar -> BallDontLie -> TheSportsDB -> RapidAPI)
   - Body supports either:
     - JSON: `{"players":[{"name":"Scottie Scheffler","country":"USA","world_rank":1}]}`
     - CSV text: `{"csv":"name,country,world_rank\nScottie Scheffler,USA,1"}`
 
 - Tournament source behavior:
-  - Default provider is TheSportsDB (plus template fallback).
+  - Default provider compares BallDontLie vs TheSportsDB vs template and seeds from the provider with more upcoming events.
+  - `/api/tournaments/future` deduplicates overlapping events by name/date and prefers BallDontLie IDs.
   - SportsDataIO is disabled by default and only used if `USE_SPORTSDATAIO=true`.
-  - If enabled, backend compares upcoming tournaments from SportsDataIO vs TheSportsDB.
+  - If enabled, backend also compares SportsDataIO counts.
   - It seeds from whichever provider returns more upcoming events.
   - If future tournament rows are low, `/api/tournaments/future` auto-backfills.

@@ -425,6 +425,58 @@ async function fetchSportradarFieldPlayers(tournament) {
   return { players: [], provider: "Sportradar", urlsTried: dedupedUrls };
 }
 
+async function fetchBallDontLieFieldPlayers(tournament) {
+  const apiKey = process.env.BALLDONTLIE_PGA_KEY || process.env.BALLDONTLIE_API_KEY || "";
+  const baseUrl = (process.env.BALLDONTLIE_PGA_BASE_URL || "https://api.balldontlie.io/pga/v1").replace(/\/+$/, "");
+  if (!apiKey || !baseUrl) return { players: [], provider: null, urlsTried: [] };
+
+  const headers = { Authorization: apiKey };
+  const tournamentRawId = String(tournament?.id || "").startsWith("bdl_")
+    ? String(tournament.id).slice(4)
+    : "";
+  const fieldSize = Number(tournament?.field_size || 0) || 156;
+
+  const tournamentUrls = tournamentRawId ? [
+    `${baseUrl}/tournament_field?tournament_id=${encodeURIComponent(tournamentRawId)}&per_page=200`,
+    `${baseUrl}/tournament-fields?tournament_id=${encodeURIComponent(tournamentRawId)}&per_page=200`,
+    `${baseUrl}/fields?tournament_id=${encodeURIComponent(tournamentRawId)}&per_page=200`,
+  ] : [];
+
+  for (const url of tournamentUrls) {
+    try {
+      const resp = await fetch(url, { headers, timeout: 12000 });
+      if (!resp.ok) continue;
+      const json = await resp.json();
+      const players = extractPlayersFromPayload(json);
+      if (players.length) return { players, provider: "BallDontLie", url, urlsTried: tournamentUrls };
+    } catch {}
+  }
+
+  // Free tier fallback: no tournament field endpoint available, seed a ranked player pool.
+  const fallbackUrls = [
+    `${baseUrl}/players?per_page=200`,
+    `${baseUrl}/players?sort=owgr&per_page=200`,
+  ];
+  for (const url of fallbackUrls) {
+    try {
+      const resp = await fetch(url, { headers, timeout: 12000 });
+      if (!resp.ok) continue;
+      const json = await resp.json();
+      const players = extractPlayersFromPayload(json).slice(0, fieldSize);
+      if (players.length) {
+        return {
+          players,
+          provider: "BallDontLie (players fallback)",
+          url,
+          urlsTried: [...tournamentUrls, ...fallbackUrls],
+        };
+      }
+    } catch {}
+  }
+
+  return { players: [], provider: "BallDontLie", urlsTried: [...tournamentUrls, ...fallbackUrls] };
+}
+
 async function importFieldPlayersIntoTournament(tournamentId, players) {
   const uniqueByName = new Map();
   for (const p of players) {
@@ -528,7 +580,16 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
       }
     }
 
-    // 2) TheSportsDB
+    // 2) BallDontLie PGA
+    if (!players.length) {
+      const bdl = await fetchBallDontLieFieldPlayers(tournament);
+      if (bdl.players?.length) {
+        players = bdl.players;
+        source = bdl.provider || "BallDontLie";
+      }
+    }
+
+    // 3) TheSportsDB
     if (eventId) {
       const tsdbKey = process.env.THE_SPORTS_DB_KEY || "3";
       const base = `https://www.thesportsdb.com/api/v1/json/${tsdbKey}`;
@@ -552,7 +613,7 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
       }
     }
 
-    // 3) RapidAPI fallback
+    // 4) RapidAPI fallback
     if (!players.length) {
       const rapid = await fetchRapidApiFieldPlayers(tournament);
       if (rapid.players?.length) {
@@ -564,7 +625,7 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
     players = players.filter((p) => p.name);
     if (!players.length) {
       return res.status(404).json({
-        error: "No player list found from Sportradar, TheSportsDB, or RapidAPI for this tournament yet.",
+        error: "No player list found from BallDontLie, Sportradar, TheSportsDB, or RapidAPI for this tournament yet.",
       });
     }
 
