@@ -49,7 +49,7 @@
       <path d="M44,77.5 Q41,83 44,88" stroke="#ccc" stroke-width="0.7" fill="none" stroke-linecap="round"/>
     </g>
     <text x="250" y="174" font-family="Playfair Display, Georgia, serif" font-size="118" font-weight="700" letter-spacing="0.5">
-      <tspan fill="#ffffff">My</tspan><tspan fill="url(#gg)">Golf</tspan><tspan fill="#ffffff">PoolPro</tspan>
+      <tspan fill="#ffffff">My</tspan><tspan fill="url(#gg)" dx="2">Golf</tspan><tspan fill="#ffffff" dx="12">PoolPro</tspan>
     </text>
   </g>
 </svg>
