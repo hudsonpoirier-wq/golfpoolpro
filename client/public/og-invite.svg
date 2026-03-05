@@ -28,8 +28,8 @@
   <rect width="1200" height="630" fill="url(#bg)"/>
   <rect width="1200" height="630" fill="url(#bga)"/>
   <rect x="55" y="108" width="1090" height="414" rx="22" fill="#132a1c" stroke="#1e3d28"/>
-  <g transform="translate(110,168)">
-    <g transform="translate(0,0) scale(2.3)">
+  <g transform="translate(120,194)">
+    <g transform="translate(0,0) scale(2.2)">
       <path d="M5,5 L89,5 L94,10 L94,68 Q94,100 47,112 Q0,100 0,68 L0,10 Z" fill="url(#bg2)" filter="url(#ds)"/>
       <path d="M7,9 L87,9 L91,13 L91,68 Q91,97 47,108 Q3,97 3,68 L3,13 Z" fill="url(#sg)"/>
       <path d="M11,17 L83,17 L86,20 L86,67 Q86,92 47,102 Q8,92 8,67 L8,20 Z" fill="none" stroke="url(#gg)" stroke-width="1" opacity="0.35"/>
@@ -48,10 +48,8 @@
       <path d="M38,77.5 Q41,83 38,88" stroke="#ccc" stroke-width="0.7" fill="none" stroke-linecap="round"/>
       <path d="M44,77.5 Q41,83 44,88" stroke="#ccc" stroke-width="0.7" fill="none" stroke-linecap="round"/>
     </g>
-    <text x="260" y="164" font-family="Playfair Display, Georgia, serif" font-size="112" font-weight="700" fill="#ffffff">My</text>
-    <text x="425" y="164" font-family="Playfair Display, Georgia, serif" font-size="112" font-weight="700" fill="url(#gg)">Golf</text>
-    <text x="648" y="164" font-family="Playfair Display, Georgia, serif" font-size="112" font-weight="700" fill="#ffffff">PoolPro</text>
-    <line x1="260" y1="194" x2="1030" y2="194" stroke="url(#gg)" stroke-width="2" opacity="0.8"/>
-    <text x="450" y="234" font-family="Montserrat, Arial, sans-serif" font-size="26" letter-spacing="8" font-weight="600" fill="#7aaa8e">DRAFT · TRACK · WIN</text>
+    <text x="250" y="174" font-family="Playfair Display, Georgia, serif" font-size="118" font-weight="700" letter-spacing="0.5">
+      <tspan fill="#ffffff">My</tspan><tspan fill="url(#gg)">Golf</tspan><tspan fill="#ffffff">PoolPro</tspan>
+    </text>
   </g>
 </svg>

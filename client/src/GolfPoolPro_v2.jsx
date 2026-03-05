@@ -96,11 +96,11 @@ select.inp{cursor:pointer}
 /* HERO */
 .hero{background:linear-gradient(148deg,#0A2018 0%,var(--forest) 55%,#183828 100%);padding:80px 40px;position:relative;overflow:hidden;text-align:center}
 .hero::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at 20% 70%,rgba(200,169,79,.09) 0%,transparent 50%),radial-gradient(ellipse at 80% 25%,rgba(64,145,108,.1) 0%,transparent 50%)}
-.hero::after{content:'⛳';position:absolute;right:7%;top:50%;transform:translateY(-50%);font-size:180px;opacity:.045;pointer-events:none}
+.hero::after{display:none}
 .hero-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 14px;border-radius:20px;background:rgba(200,169,79,.14);border:1px solid rgba(200,169,79,.28);color:var(--gold);font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:20px}
 .hero-title{font-family:'Cormorant Garamond',serif;font-size:60px;font-weight:700;color:#fff;line-height:1.06;margin-bottom:16px}
 .hero-title span{color:var(--gold)}
-.hero-logo{width:100%;max-width:560px;height:auto;display:block;margin:0 auto 16px}
+.hero-logo{width:100%;max-width:700px;height:auto;display:block;margin:0 auto}
 .hero-sub{font-size:16px;color:rgba(255,255,255,.62);max-width:540px;margin:0 auto 36px;line-height:1.65}
 
 /* POOL CARD */
@@ -1745,13 +1745,6 @@ export default function GolfPoolPro() {
             <button className="logo-btn" type="button" onClick={()=>{setView("home");setActivePool(null);}} aria-label="MyGolfPoolPro home">
               <img className="logo-icon" src="/logo-icon.svg" alt="MyGolfPoolPro icon" />
             </button>
-            <div className="nav-links">
-              {[["home","🏠 My Pools"]].map(([v,l])=>(
-                <button key={v} className={`ntab ${view===v||view==="pool"||view==="admin"?"on":""}`} onClick={()=>{setView("home");setActivePool(null);}}>
-                  {l}
-                </button>
-              ))}
-            </div>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               <div className="nav-user">
                 <Avatar init={effectiveUserId ? (getEffectiveUserAvatar()||"AD") : "AD"} size={24} color="var(--gold)"/>
@@ -1832,15 +1825,10 @@ export default function GolfPoolPro() {
             <div className="hero">
               <div style={{position:"relative",zIndex:1}}>
                 <img className="hero-logo" src="/logo-primary-dark.svg" alt="MyGolfPoolPro" />
-                <p className="hero-sub">Your premier platform for high-stakes golf pool competitions. Draft smarter, track deeper, win bigger.</p>
               </div>
             </div>
             <div className="page">
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
-                <div>
-                  <h2 className="h2">My Pools</h2>
-                  <p className="sub">{pools.length} pools · {pools.filter(p=>p.status==="live").length} active</p>
-                </div>
+              <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",marginBottom:24}}>
                 <button className="btn btn-prim" onClick={()=>setView("admin")}>+ New Pool</button>
               </div>
               <div className="g3" style={{marginBottom:40}}>
@@ -2983,7 +2971,7 @@ export default function GolfPoolPro() {
         {view==="admin" && (
           <div className="page">
             <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:22}}>
-              <button className="btn btn-ghost btn-sm" onClick={()=>setView("home")}>← My Pools</button>
+              <button className="btn btn-ghost btn-sm" onClick={()=>setView("home")}>← Home</button>
               <div>
                 <h2 className="h2">Create New Pool</h2>
                 <p className="sub">Configure your pool here. Invite links are available after the pool is created.</p>
@@ -3398,7 +3386,7 @@ export default function GolfPoolPro() {
                 <div>
                   <h3 className="h3" style={{marginBottom:8}}>Review Pool Details</h3>
                   <p className="sub" style={{fontSize:13,marginBottom:14}}>
-                    You are signed in. Click Join Pool to enter this pool and add it to your My Pools list.
+                    You are signed in. Click Join Pool to enter this pool and add it to your account.
                   </p>
                   <div style={{background:"var(--cream)",border:"1px solid var(--cream-2)",borderRadius:12,padding:"14px 16px",marginBottom:14}}>
                     <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--cream-2)"}}>
