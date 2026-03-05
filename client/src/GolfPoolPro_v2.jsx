@@ -626,7 +626,7 @@ function ShotClock({total,time}) {
 /* ─── MAIN APP ─── */
 export default function GolfPoolPro() {
   const [view,setView] = useState(()=> LS.get("mgpp_session", null) ? "home" : "invite");
-  const [adminTab,setAdminTab] = useState("config");
+  const adminTab = "config";
   const [analyticsTab,setAnalyticsTab] = useState("leaderboard");
   const [statsTab,setStatsTab] = useState("overview");
   const [statsPlayer,setStatsPlayer] = useState(null);
@@ -1165,6 +1165,7 @@ export default function GolfPoolPro() {
     const me = participants.find((p)=>String(p.id)===String(fallbackUserId));
     return me ? [me] : [];
   })();
+  const poolIsFull = !!activePool && joinedParticipants.length >= Number(activePool.maxParticipants || 0);
 
   // Get picks for active pool (or current draft)
   const activePicks = activePool ? (allDrafted[activePool.id]||[]) : drafted;
@@ -2091,14 +2092,22 @@ export default function GolfPoolPro() {
                     </div>
                     <div className="card">
                       <h4 className="h4" style={{marginBottom:8}}>Invite More Players</h4>
-                      <p className="sub" style={{marginBottom:12,fontSize:13}}>Share this link so others can log in or create an account to join.</p>
-                      <div className="link-box" style={{marginBottom:10}}>
-                        <span className="link-txt" title={buildInviteUrl(activePool)}>{compactInviteUrl(activePool)}</span>
-                        <div style={{display:"flex",gap:6,flexShrink:0}}>
-                          <button className="btn btn-ghost btn-sm" onClick={()=>copyLink(buildInviteUrl(activePool))}>Copy</button>
-                          <button className="btn btn-prim btn-sm" onClick={()=>openInvite(activePool)}>Preview</button>
-                        </div>
-                      </div>
+                      {poolIsFull ? (
+                        <p className="sub" style={{marginBottom:0,fontSize:13}}>
+                          Pool is full ({joinedParticipants.length}/{activePool.maxParticipants}). Invite link is unavailable.
+                        </p>
+                      ) : (
+                        <>
+                          <p className="sub" style={{marginBottom:12,fontSize:13}}>Share this link so others can log in or create an account to join.</p>
+                          <div className="link-box" style={{marginBottom:10}}>
+                            <span className="link-txt" title={buildInviteUrl(activePool)}>{compactInviteUrl(activePool)}</span>
+                            <div style={{display:"flex",gap:6,flexShrink:0}}>
+                              <button className="btn btn-ghost btn-sm" onClick={()=>copyLink(buildInviteUrl(activePool))}>Copy</button>
+                              <button className="btn btn-prim btn-sm" onClick={()=>openInvite(activePool)}>Preview</button>
+                            </div>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -2933,13 +2942,11 @@ export default function GolfPoolPro() {
               <button className="btn btn-ghost btn-sm" onClick={()=>setView("home")}>← My Pools</button>
               <div>
                 <h2 className="h2">Create New Pool</h2>
-                <p className="sub">Configure your pool, then invite participants via a single shareable link.</p>
+                <p className="sub">Configure your pool here. Invite links are available after the pool is created.</p>
               </div>
             </div>
             <div className="tabs" style={{maxWidth:540}}>
-              {[["config","⚙️ Config"],["participants","👥 Roster"],["links","🔗 Invite Link"]].map(([t,l])=>(
-                <button key={t} className={`tab ${adminTab===t?"on":""}`} onClick={()=>setAdminTab(t)}>{l}</button>
-              ))}
+              <button className="tab on" type="button">⚙️ Config</button>
             </div>
 
             {adminTab==="config" && (
