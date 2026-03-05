@@ -3,6 +3,30 @@
 const router = require("express").Router();
 const { requireAuth } = require("../middleware/auth");
 
+const LOBBY_TTL_MS = 15000;
+const lobbyPresence = new Map(); // poolId -> Map(userId -> lastSeenMs)
+
+function pruneLobby(poolId) {
+  const byUser = lobbyPresence.get(poolId);
+  if (!byUser) return [];
+  const now = Date.now();
+  for (const [uid, ts] of byUser.entries()) {
+    if (!Number.isFinite(ts) || now - ts > LOBBY_TTL_MS) byUser.delete(uid);
+  }
+  if (!byUser.size) lobbyPresence.delete(poolId);
+  return [...(lobbyPresence.get(poolId)?.keys() || [])];
+}
+
+function touchLobby(poolId, userId) {
+  let byUser = lobbyPresence.get(poolId);
+  if (!byUser) {
+    byUser = new Map();
+    lobbyPresence.set(poolId, byUser);
+  }
+  byUser.set(userId, Date.now());
+  return pruneLobby(poolId);
+}
+
 // ─── GET /api/pools ───────────────────────────────────────────
 // Returns all pools the current user is a member of
 router.get("/", requireAuth, async (req, res, next) => {
@@ -104,7 +128,54 @@ router.get("/:id", requireAuth, async (req, res, next) => {
       .eq("pool_id", id)
       .order("score", { ascending: true });
 
-    res.json({ pool, members, picks, standings });
+    res.json({ pool, members, picks, standings, activeLobbyUserIds: pruneLobby(id) });
+  } catch (e) { next(e); }
+});
+
+// ─── POST /api/pools/:id/presence/heartbeat ───────────────────
+router.post("/:id/presence/heartbeat", requireAuth, async (req, res, next) => {
+  try {
+    const sb = req.app.locals.supabase;
+    const { id } = req.params;
+    const { data: member } = await sb
+      .from("pool_members")
+      .select("user_id")
+      .eq("pool_id", id)
+      .eq("user_id", req.user.id)
+      .single();
+    if (!member) return res.status(403).json({ error: "You are not a member of this pool." });
+    const activeLobbyUserIds = touchLobby(id, req.user.id);
+    res.json({ activeLobbyUserIds, ttlMs: LOBBY_TTL_MS });
+  } catch (e) { next(e); }
+});
+
+// ─── GET /api/pools/:id/presence ─────────────────────────────
+router.get("/:id/presence", requireAuth, async (req, res, next) => {
+  try {
+    const sb = req.app.locals.supabase;
+    const { id } = req.params;
+    const { data: member } = await sb
+      .from("pool_members")
+      .select("user_id")
+      .eq("pool_id", id)
+      .eq("user_id", req.user.id)
+      .single();
+    if (!member) return res.status(403).json({ error: "You are not a member of this pool." });
+    const activeLobbyUserIds = pruneLobby(id);
+    res.json({ activeLobbyUserIds, ttlMs: LOBBY_TTL_MS });
+  } catch (e) { next(e); }
+});
+
+// ─── DELETE /api/pools/:id/presence ──────────────────────────
+router.delete("/:id/presence", requireAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const byUser = lobbyPresence.get(id);
+    if (byUser) {
+      byUser.delete(req.user.id);
+      if (!byUser.size) lobbyPresence.delete(id);
+    }
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 
@@ -192,6 +263,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
       .single();
     if (delErr) return res.status(400).json({ error: delErr.message || "Could not delete pool." });
     if (!deleted?.id) return res.status(500).json({ error: "Pool deletion was not confirmed." });
+    lobbyPresence.delete(id);
 
     res.json({ message: "Pool deleted.", id: deleted.id });
   } catch (e) { next(e); }

@@ -187,6 +187,12 @@ export const Pools = {
 
   /** Get live standings */
   standings: (poolId) => get(`/api/pools/${poolId}/standings`),
+  /** Lobby presence heartbeat (who is actively viewing this pool lobby) */
+  heartbeat: (poolId) => post(`/api/pools/${poolId}/presence/heartbeat`, {}),
+  /** Get active lobby presence users */
+  presence: (poolId) => get(`/api/pools/${poolId}/presence`),
+  /** Stop advertising presence (on leave/unload) */
+  leavePresence: (poolId) => del(`/api/pools/${poolId}/presence`),
 };
 
 
@@ -213,7 +219,7 @@ export const Invites = {
       env.VITE_SITE_URL ||
       env.REACT_APP_SITE_URL ||
       "https://mygolfpoolpro.com";
-    return `${base}/#/join/${pool.invite_token}`;
+    return `${base}/join/${pool.invite_token}`;
   },
 
   /** Regenerate invite token (invalidates old links) */

@@ -672,6 +672,7 @@ export default function GolfPoolPro() {
   const [authBusy,setAuthBusy] = useState(false);
   const [readyBusyMap,setReadyBusyMap] = useState({});
   const [deleteBusy,setDeleteBusy] = useState(false);
+  const [activeLobbyUserIds,setActiveLobbyUserIds] = useState([]);
   const [resetPass,setResetPass] = useState("");
   const [resetPassConfirm,setResetPassConfirm] = useState("");
 
@@ -1087,6 +1088,7 @@ export default function GolfPoolPro() {
             pickNum: p.pick_number,
           })),
         }));
+        setActiveLobbyUserIds(Array.isArray(resp?.activeLobbyUserIds) ? resp.activeLobbyUserIds : []);
         setDrafted(picks.map((p) => ({
           golferId: p.golfer_id,
           participantId: p.user_id,
@@ -1116,6 +1118,32 @@ export default function GolfPoolPro() {
     const t = setInterval(syncPool, 4000);
     return () => { cancelled = true; clearInterval(t); };
   }, [activePool?.id, view, currentUser]);
+
+  // Broadcast active presence only while user is actively on this pool lobby view.
+  useEffect(() => {
+    if (!apiToken.get() || !activePool?.id || view !== "pool" || poolPhase !== "lobby") return undefined;
+    let stopped = false;
+    const beat = async () => {
+      try {
+        const resp = await Pools.heartbeat(activePool.id);
+        if (!stopped && Array.isArray(resp?.activeLobbyUserIds)) {
+          setActiveLobbyUserIds(resp.activeLobbyUserIds);
+        }
+      } catch {}
+    };
+    beat();
+    const t = setInterval(beat, 5000);
+    const leaveNow = async () => {
+      try { await Pools.leavePresence(activePool.id); } catch {}
+    };
+    window.addEventListener("pagehide", leaveNow);
+    return () => {
+      stopped = true;
+      clearInterval(t);
+      window.removeEventListener("pagehide", leaveNow);
+      leaveNow();
+    };
+  }, [activePool?.id, poolPhase, view, currentUser]);
 
   // Require backend auth session for all non-invite screens.
   useEffect(()=>{
@@ -1165,6 +1193,9 @@ export default function GolfPoolPro() {
     const me = participants.find((p)=>String(p.id)===String(fallbackUserId));
     return me ? [me] : [];
   })();
+  const lobbyVisibleParticipants = poolPhase === "lobby"
+    ? joinedParticipants.filter((p) => activeLobbyUserIds.some((id) => String(id) === String(p.id)))
+    : joinedParticipants;
   const poolIsFull = !!activePool && joinedParticipants.length >= Number(activePool.maxParticipants || 0);
 
   // Get picks for active pool (or current draft)
@@ -1343,12 +1374,12 @@ export default function GolfPoolPro() {
     if (!token) return `${SITE_BASE}/`;
     const encoded = encodeInviteData(pool);
     const suffix = encoded ? `?d=${encodeURIComponent(encoded)}` : "";
-    return `${SITE_BASE}/#/join/${encodeURIComponent(token)}${suffix}`;
+    return `${SITE_BASE}/join/${encodeURIComponent(token)}${suffix}`;
   };
   const compactInviteUrl = (pool) => {
     const token = pool?.invite_token || pool?.inviteToken || pool?.id || "";
     const short = token.length > 14 ? `${token.slice(0,7)}…${token.slice(-5)}` : token;
-    return `${SITE_BASE}/#/join/${short}`;
+    return `${SITE_BASE}/join/${short}`;
   };
   const createFlowInviteUrl = buildInviteUrl({ invite_token: pendingInviteToken });
 
@@ -1683,6 +1714,7 @@ export default function GolfPoolPro() {
   // Check if all joined participants are ready
   const readyCount = Object.values(poolReadyMap).filter(Boolean).length;
   const allReady = joinedParticipants.length>0 && readyCount>=joinedParticipants.length;
+  const lobbyReadyCount = lobbyVisibleParticipants.filter((p) => !!poolReadyMap[p.id]).length;
 
   // Auto-launch when all ready
   useEffect(()=>{
@@ -1996,7 +2028,10 @@ export default function GolfPoolPro() {
                   <div style={{position:"relative",zIndex:1}}>
                     <p style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"1px",color:"rgba(255,255,255,.6)",marginBottom:6}}>Draft Lobby</p>
                     <h2 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:32,fontWeight:700,color:"#fff",marginBottom:8}}>{activePool.name}</h2>
-                    <p style={{color:"rgba(255,255,255,.7)",fontSize:14}}>{readyCount}/{joinedParticipants.length} participants ready{allReady?" · Launching draft…":""}</p>
+                    <p style={{color:"rgba(255,255,255,.7)",fontSize:14}}>
+                      {lobbyReadyCount}/{lobbyVisibleParticipants.length} currently in lobby
+                      {allReady?" · Launching draft…":""}
+                    </p>
                   </div>
                 </div>
 
@@ -2014,7 +2049,7 @@ export default function GolfPoolPro() {
                   <div>
                     <h3 className="h3" style={{marginBottom:14}}>Participants — Ready Up!</h3>
                     <div className="ready-grid">
-                      {joinedParticipants.map(p=>{
+                      {lobbyVisibleParticipants.map(p=>{
                         const isReady = !!poolReadyMap[p.id];
                         return (
                           <div key={p.id} className={`ready-card ${isReady?"is-ready":""}`}>
@@ -2057,6 +2092,11 @@ export default function GolfPoolPro() {
                           </div>
                         );
                       })}
+                      {lobbyVisibleParticipants.length === 0 && (
+                        <div className="card" style={{gridColumn:"1 / -1",padding:"14px 16px"}}>
+                          <p style={{fontSize:13,color:"var(--muted)"}}>No one is actively in this lobby right now.</p>
+                        </div>
+                      )}
                     </div>
                     {!allReady && isHostOfActivePool && (
                       <button className="btn btn-ghost btn-sm" style={{marginTop:8}} onClick={async ()=>{
@@ -3158,7 +3198,7 @@ export default function GolfPoolPro() {
                   </div>
                   <div className="link-box" style={{marginBottom:16}}>
                     <span className="link-txt" title={activePool ? buildInviteUrl(activePool) : createFlowInviteUrl}>
-                      {activePool ? compactInviteUrl(activePool) : `${SITE_BASE}/#/join/${pendingInviteToken.slice(0,7)}…${pendingInviteToken.slice(-5)}`}
+                      {activePool ? compactInviteUrl(activePool) : `${SITE_BASE}/join/${pendingInviteToken.slice(0,7)}…${pendingInviteToken.slice(-5)}`}
                     </span>
                     <div style={{display:"flex",gap:6,flexShrink:0}}>
                       <button className="btn btn-ghost btn-sm" onClick={()=>copyLink(activePool ? buildInviteUrl(activePool) : createFlowInviteUrl)}>📋 Copy</button>

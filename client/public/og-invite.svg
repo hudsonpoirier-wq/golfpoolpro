@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="MyGolfPoolPro Invite">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1B4332"/>
+      <stop offset="100%" stop-color="#2D6A4F"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <circle cx="1060" cy="120" r="180" fill="#D4AF37" fill-opacity="0.12"/>
+  <circle cx="120" cy="560" r="170" fill="#D4AF37" fill-opacity="0.10"/>
+  <text x="80" y="220" font-family="Georgia, 'Times New Roman', serif" font-size="84" font-weight="700" fill="#F7E4A1">MyGolfPoolPro</text>
+  <text x="80" y="305" font-family="Arial, sans-serif" font-size="38" fill="#E9F5EE">You’ve been invited to join a golf pool</text>
+  <rect x="80" y="355" rx="14" ry="14" width="430" height="84" fill="#D4AF37"/>
+  <text x="118" y="408" font-family="Arial, sans-serif" font-size="38" font-weight="700" fill="#1B4332">Join Pool</text>
+  <text x="80" y="515" font-family="Arial, sans-serif" font-size="30" fill="#DDEEE5">Draft teams. Track live standings. Compete with friends.</text>
+</svg>
