@@ -20,11 +20,11 @@
       ]
     },
     {
-      "source": "/og-invite.png",
+      "source": "/og-invite-v2.svg",
       "headers": [
         {
           "key": "Content-Type",
-          "value": "image/png"
+          "value": "image/svg+xml; charset=utf-8"
         },
         {
           "key": "Cache-Control",
