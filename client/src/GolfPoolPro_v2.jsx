@@ -646,6 +646,7 @@ export default function GolfPoolPro() {
   const [poolStatsPlayer,setPoolStatsPlayer] = useState(null);
   const [confirmDelete,setConfirmDelete] = useState(false);
   const [showSettings,setShowSettings] = useState(false);
+  const [showUserMenu,setShowUserMenu] = useState(false);
   const [newPassword,setNewPassword] = useState("");
   const [confirmPassword,setConfirmPassword] = useState("");
   const [passwordMsg,setPasswordMsg] = useState("");
@@ -686,6 +687,7 @@ export default function GolfPoolPro() {
   const forgotEmailRef = useRef(null);
   const resetPassRef = useRef(null);
   const resetPassConfirmRef = useRef(null);
+  const userMenuRef = useRef(null);
 
   const handleAuthEnter = (e, { nextRef = null, submit = null } = {}) => {
     if (e.key !== "Enter") return;
@@ -698,6 +700,16 @@ export default function GolfPoolPro() {
     }
     if (typeof submit === "function") submit();
   };
+
+  useEffect(() => {
+    if (!showUserMenu) return;
+    const onDocClick = (ev) => {
+      if (!userMenuRef.current) return;
+      if (!userMenuRef.current.contains(ev.target)) setShowUserMenu(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [showUserMenu]);
 
   // Config for new pool creation
   const [config,setConfig] = useState({
@@ -1626,6 +1638,7 @@ export default function GolfPoolPro() {
   const handleLogout = async () => {
     try { await Auth.logout(); } catch {}
     setCurrentUser(null);
+    setShowUserMenu(false);
     setShowSettings(false);
     setActivePool(null);
     setInvitePool(null);
@@ -1775,20 +1788,41 @@ export default function GolfPoolPro() {
             <button className="logo-btn" type="button" onClick={()=>{setView("home");setActivePool(null);}} aria-label="GolfPoolPro home">
               <img className="logo-icon" src="/logo-icon-v2.svg" alt="GolfPoolPro icon" />
             </button>
-            <div style={{display:"flex",alignItems:"center",gap:8}}>
-              <div className="nav-user">
+            <div style={{display:"flex",alignItems:"center",gap:8,position:"relative"}} ref={userMenuRef}>
+              <button
+                type="button"
+                className="nav-user"
+                aria-haspopup="menu"
+                aria-expanded={showUserMenu}
+                onClick={()=>setShowUserMenu(v=>!v)}
+              >
                 <Avatar init={effectiveUserId ? (getEffectiveUserAvatar()||"AD") : "AD"} size={24} color="var(--gold)"/>
                 <span>{effectiveUserId ? (getEffectiveUserName()||"Account").split(" ")[0] : "Guest"}</span>
-              </div>
-              <button onClick={()=>{setShowSettings(s=>!s);setPasswordMsg("");setNewPassword("");setConfirmPassword("");}}
-                style={{padding:"5px 12px",borderRadius:20,border:`1px solid ${showSettings?"rgba(200,169,79,.5)":"rgba(255,255,255,.18)"}`,background:showSettings?"rgba(200,169,79,.15)":"rgba(255,255,255,.06)",color:showSettings?"var(--gold)":"rgba(255,255,255,.55)",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",transition:"all .15s"}}>
-                ⚙ Settings
               </button>
-              <button onClick={handleLogout} style={{padding:"5px 12px",borderRadius:20,border:"1px solid rgba(255,255,255,.18)",background:"rgba(255,255,255,.06)",color:"rgba(255,255,255,.55)",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",transition:"all .15s"}}
-                onMouseEnter={e=>{e.target.style.background="rgba(220,38,38,.25)";e.target.style.color="#FCA5A5";e.target.style.borderColor="rgba(220,38,38,.4)";}}
-                onMouseLeave={e=>{e.target.style.background="rgba(255,255,255,.06)";e.target.style.color="rgba(255,255,255,.55)";e.target.style.borderColor="rgba(255,255,255,.18)";}}>
-                Log out
-              </button>
+              {showUserMenu && (
+                <div style={{position:"absolute",top:42,right:0,minWidth:170,background:"#133526",border:"1px solid rgba(255,255,255,.12)",borderRadius:12,boxShadow:"0 12px 28px rgba(0,0,0,.35)",overflow:"hidden",zIndex:450}}>
+                  <button
+                    type="button"
+                    onClick={()=>{
+                      setShowUserMenu(false);
+                      setShowSettings(true);
+                      setPasswordMsg("");
+                      setNewPassword("");
+                      setConfirmPassword("");
+                    }}
+                    style={{display:"block",width:"100%",textAlign:"left",padding:"11px 12px",background:"transparent",border:"none",color:"rgba(255,255,255,.88)",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}
+                  >
+                    Settings
+                  </button>
+                  <button
+                    type="button"
+                    onClick={()=>{ setShowUserMenu(false); handleLogout(); }}
+                    style={{display:"block",width:"100%",textAlign:"left",padding:"11px 12px",background:"transparent",border:"none",color:"#FCA5A5",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",borderTop:"1px solid rgba(255,255,255,.08)"}}
+                  >
+                    Log out
+                  </button>
+                </div>
+              )}
             </div>
           </nav>
           {/* ──────── SETTINGS PANEL ──────── */}

@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="280" viewBox="0 0 1280 280" role="img" aria-label="GolfPoolPro logo">
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="235" viewBox="0 0 900 235" role="img" aria-label="GolfPoolPro logo">
   <defs>
     <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#e8c96a"/>
@@ -9,20 +9,15 @@
       <stop offset="0%" stop-color="#3a2d08"/>
       <stop offset="100%" stop-color="#6b5312"/>
     </linearGradient>
-    <linearGradient id="fadeLine" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#c9a227" stop-opacity="0.95"/>
-      <stop offset="75%" stop-color="#c9a227" stop-opacity="0.45"/>
-      <stop offset="100%" stop-color="#c9a227" stop-opacity="0"/>
-    </linearGradient>
     <radialGradient id="shieldGlow" cx="45%" cy="40%" r="65%">
       <stop offset="0%" stop-color="#e8c96a" stop-opacity="0.18"/>
       <stop offset="100%" stop-color="#e8c96a" stop-opacity="0"/>
     </radialGradient>
   </defs>
 
-  <g transform="translate(40,26)">
-    <!-- Icon (transparent background) -->
-    <g transform="translate(0,8)">
+  <g transform="translate(48,12)">
+    <!-- Transparent icon (no white background) -->
+    <g transform="translate(0,6) scale(0.86)">
       <path d="M10 16 H180 L194 30 V152 C194 197 153 223 102 237 C52 223 10 197 10 152 V30 Z" fill="url(#goldDark)" stroke="url(#gold)" stroke-width="7"/>
       <path d="M22 34 H168 L176 42 V149 C176 184 145 205 102 217 C60 205 28 184 28 149 V42 Z" fill="none" stroke="url(#gold)" stroke-width="2.4" opacity="0.45"/>
       <ellipse cx="102" cy="64" rx="54" ry="42" fill="url(#shieldGlow)"/>
@@ -41,13 +36,8 @@
       </g>
     </g>
 
-    <!-- Wordmark with safe spacing -->
-    <text x="240" y="142" font-family="Playfair Display, Georgia, serif" font-size="122" font-weight="700" fill="#f6f6f5">GolfPoolPro</text>
-
-    <!-- Gold overlay for Golf only -->
-    <text x="240" y="142" font-family="Playfair Display, Georgia, serif" font-size="122" font-weight="700" fill="url(#gold)">Golf</text>
-
-    <!-- Thin fading line from G to end of Pro -->
-    <line x1="246" y1="162" x2="1140" y2="162" stroke="url(#fadeLine)" stroke-width="2"/>
+    <!-- Wordmark: explicit split so f/P never overlap -->
+    <text x="245" y="138" font-family="Playfair Display, Georgia, serif" font-size="86" font-weight="700" fill="url(#gold)">Golf</text>
+    <text x="432" y="138" font-family="Playfair Display, Georgia, serif" font-size="86" font-weight="700" fill="#f6f6f5">PoolPro</text>
   </g>
 </svg>
