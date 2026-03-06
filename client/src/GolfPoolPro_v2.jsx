@@ -1564,7 +1564,7 @@ export default function GolfPoolPro() {
         setInviteView(true);
         setView("invite");
       } else {
-        notify(`Welcome to MyGolfPoolPro, ${name.split(" ")[0]}!`);
+        notify(`Welcome to GolfPoolPro, ${name.split(" ")[0]}!`);
         setView("home");
       }
       return;
@@ -1694,7 +1694,13 @@ export default function GolfPoolPro() {
         }
       }
       if (!joinedPoolId) throw new Error("Unable to resolve pool ID from invite.");
-      const details = await Pools.get(joinedPoolId);
+      let details = null;
+      try {
+        details = await Pools.get(joinedPoolId);
+      } catch (detailsErr) {
+        // Keep join flow resilient: if details fetch fails, still route to lobby with invite data.
+        console.warn("Pool details fetch failed after join; using invite fallback:", detailsErr?.message || detailsErr);
+      }
       const bp = details?.pool || {};
       const mappedPool = {
         id: bp.id || invitePool.id,
@@ -1715,6 +1721,7 @@ export default function GolfPoolPro() {
       setActivePool(mappedPool);
       setPoolPhase(mappedPool.status==="live"?"live":mappedPool.status==="draft"?"draft":"lobby");
       setView("pool");
+      setInviteView(false);
       setAuthSuccess("");
       clearHash();
       notify(`Joined ${mappedPool.name}!`);
@@ -3291,7 +3298,7 @@ export default function GolfPoolPro() {
           <div className="portal-wrap">
             <div className="portal-card fade-up">
               <div style={{textAlign:"center",marginBottom:24}}>
-                <div className="logo" style={{fontSize:22,display:"inline-block",marginBottom:12}}>My<em style={{color:"var(--text)"}}>Golf</em><span style={{color:"var(--gold)"}}>PoolPro</span></div>
+                <div className="logo" style={{fontSize:22,display:"inline-block",marginBottom:12}}><em style={{color:"var(--text)"}}>Golf</em><span style={{color:"var(--gold)"}}>PoolPro</span></div>
                 {invitePool && (
                   <div style={{background:"var(--forest)",borderRadius:12,padding:"16px 20px",color:"#fff",marginBottom:0}}>
                     <p style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"1px",color:"rgba(255,255,255,.55)",marginBottom:4}}>You've been invited to</p>
