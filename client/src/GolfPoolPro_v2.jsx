@@ -1773,7 +1773,7 @@ export default function GolfPoolPro() {
           <>
           <nav className="nav">
             <button className="logo-btn" type="button" onClick={()=>{setView("home");setActivePool(null);}} aria-label="GolfPoolPro home">
-              <img className="logo-icon" src="/logo-icon.svg" alt="GolfPoolPro icon" />
+              <img className="logo-icon" src="/logo-icon-v2.svg" alt="GolfPoolPro icon" />
             </button>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               <div className="nav-user">
@@ -1854,7 +1854,7 @@ export default function GolfPoolPro() {
           <div>
             <div className="hero">
               <div style={{position:"relative",zIndex:1}}>
-                <img className="hero-logo" src="/logo-primary-dark.svg" alt="GolfPoolPro" />
+                <img className="hero-logo" src="/logo-primary-dark-v2.svg" alt="GolfPoolPro" />
               </div>
             </div>
             <div className="page">

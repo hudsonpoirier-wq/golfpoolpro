@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="260" viewBox="0 0 1180 260" role="img" aria-label="GolfPoolPro logo">
+  <defs>
+    <linearGradient id="gg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e8c96a"/>
+      <stop offset="50%" stop-color="#c9a227"/>
+      <stop offset="100%" stop-color="#9a7510"/>
+    </linearGradient>
+    <linearGradient id="divider" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#c9a227" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#c9a227" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(20,20)">
+    <image href="/logo-icon-enhanced-v2.png" x="10" y="0" width="104" height="155" preserveAspectRatio="xMidYMid meet"/>
+    <text x="150" y="124" font-family="Playfair Display, Georgia, serif" font-size="92" font-weight="700" letter-spacing="0">
+      <tspan fill="url(#gg)">Golf</tspan><tspan dx="8" fill="#ffffff">PoolPro</tspan>
+    </text>
+    <line x1="150" y1="143" x2="1110" y2="143" stroke="url(#divider)" stroke-width="2"/>
+    <text x="634" y="184" text-anchor="middle" font-family="Montserrat, Arial, sans-serif" font-size="34" font-weight="600" letter-spacing="9" fill="#7aaa8e">DRAFT · TRACK · WIN</text>
+  </g>
+</svg>
