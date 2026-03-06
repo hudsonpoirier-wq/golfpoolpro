@@ -94,7 +94,7 @@ select.inp{cursor:pointer}
 .page-wide{padding:28px 24px;max-width:1500px;margin:0 auto}
 
 /* HERO */
-.hero{background:linear-gradient(148deg,#091d15 0%,#184632 55%,#15392a 100%);padding:80px 40px;position:relative;overflow:hidden;text-align:center}
+.hero{background:linear-gradient(148deg,#06140f 0%,#113727 55%,#0e2a1e 100%);padding:80px 40px;position:relative;overflow:hidden;text-align:center}
 .hero::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at 20% 70%,rgba(200,169,79,.09) 0%,transparent 50%),radial-gradient(ellipse at 80% 25%,rgba(64,145,108,.1) 0%,transparent 50%)}
 .hero::after{display:none}
 .hero-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 14px;border-radius:20px;background:rgba(200,169,79,.14);border:1px solid rgba(200,169,79,.28);color:var(--gold);font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:20px}
