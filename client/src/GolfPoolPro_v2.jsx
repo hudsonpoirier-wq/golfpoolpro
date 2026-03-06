@@ -1888,7 +1888,7 @@ export default function GolfPoolPro() {
           <div>
             <div className="hero">
               <div style={{position:"relative",zIndex:1}}>
-                <img className="hero-logo" src="/logo-primary-dark-v5.png" alt="GolfPoolPro" />
+                <img className="hero-logo" src="/logo-primary-dark-v6.png" alt="GolfPoolPro" />
               </div>
             </div>
             <div className="page">
@@ -3041,10 +3041,6 @@ export default function GolfPoolPro() {
                 <p className="sub">Configure your pool here. Invite links are available after the pool is created.</p>
               </div>
             </div>
-            <div className="tabs" style={{maxWidth:540}}>
-              <button className="tab on" type="button">⚙️ Config</button>
-            </div>
-
             {adminTab==="config" && (
               <div className="g2" style={{maxWidth:920}}>
                 <div className="card">
