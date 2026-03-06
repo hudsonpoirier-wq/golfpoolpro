@@ -1888,7 +1888,7 @@ export default function GolfPoolPro() {
           <div>
             <div className="hero">
               <div style={{position:"relative",zIndex:1}}>
-                <img className="hero-logo" src="/logo-primary-dark-v6.png" alt="GolfPoolPro" />
+                <img className="hero-logo" src="/logo-primary-dark-current.png" alt="GolfPoolPro" />
               </div>
             </div>
             <div className="page">
