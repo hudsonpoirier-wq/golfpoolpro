@@ -678,6 +678,26 @@ export default function GolfPoolPro() {
   const [activeLobbyUserIds,setActiveLobbyUserIds] = useState([]);
   const [resetPass,setResetPass] = useState("");
   const [resetPassConfirm,setResetPassConfirm] = useState("");
+  const loginEmailRef = useRef(null);
+  const loginPassRef = useRef(null);
+  const signupNameRef = useRef(null);
+  const signupEmailRef = useRef(null);
+  const signupPassRef = useRef(null);
+  const forgotEmailRef = useRef(null);
+  const resetPassRef = useRef(null);
+  const resetPassConfirmRef = useRef(null);
+
+  const handleAuthEnter = (e, { nextRef = null, submit = null } = {}) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    if (authBusy) return;
+    if (nextRef?.current) {
+      nextRef.current.focus();
+      try { nextRef.current.select?.(); } catch {}
+      return;
+    }
+    if (typeof submit === "function") submit();
+  };
 
   // Config for new pool creation
   const [config,setConfig] = useState({
@@ -712,6 +732,16 @@ export default function GolfPoolPro() {
   useEffect(()=>{ LS.set("mgpp_members", poolMembers); },[poolMembers]);
   useEffect(()=>{ LS.set("mgpp_participants", participants); },[participants]);
   useEffect(()=>{ LS.set("mgpp_last_email", authEmail || ""); },[authEmail]);
+  useEffect(()=>{
+    if (view !== "invite") return;
+    const t = setTimeout(() => {
+      if (authMode === "login") loginEmailRef.current?.focus();
+      else if (authMode === "signup") signupNameRef.current?.focus();
+      else if (authMode === "forgot") forgotEmailRef.current?.focus();
+      else if (authMode === "reset") resetPassRef.current?.focus();
+    }, 0);
+    return ()=>clearTimeout(t);
+  },[view,authMode]);
 
   // One-time cleanup to remove legacy demo data from older localStorage sessions.
   useEffect(()=>{
@@ -1742,8 +1772,8 @@ export default function GolfPoolPro() {
         {view!=="invite" && (
           <>
           <nav className="nav">
-            <button className="logo-btn" type="button" onClick={()=>{setView("home");setActivePool(null);}} aria-label="MyGolfPoolPro home">
-              <img className="logo-icon" src="/logo-icon.svg" alt="MyGolfPoolPro icon" />
+            <button className="logo-btn" type="button" onClick={()=>{setView("home");setActivePool(null);}} aria-label="GolfPoolPro home">
+              <img className="logo-icon" src="/logo-icon.svg" alt="GolfPoolPro icon" />
             </button>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               <div className="nav-user">
@@ -1824,7 +1854,7 @@ export default function GolfPoolPro() {
           <div>
             <div className="hero">
               <div style={{position:"relative",zIndex:1}}>
-                <img className="hero-logo" src="/logo-primary-dark.svg" alt="MyGolfPoolPro" />
+                <img className="hero-logo" src="/logo-primary-dark.svg" alt="GolfPoolPro" />
               </div>
             </div>
             <div className="page">
@@ -3248,8 +3278,8 @@ export default function GolfPoolPro() {
 
               {(authMode==="login" || authMode==="signup") && (
                 <div className="auth-tabs">
-                  <button className={`auth-tab ${authMode==="login"?"on":""}`} onClick={()=>{setAuthMode("login");setAuthError("");setAuthSuccess("");}}>Log In</button>
-                  <button className={`auth-tab ${authMode==="signup"?"on":""}`} onClick={()=>{setAuthMode("signup");setAuthError("");setAuthSuccess("");}}>Create Account</button>
+                  <button type="button" className={`auth-tab ${authMode==="login"?"on":""}`} onClick={()=>{setAuthMode("login");setAuthError("");setAuthSuccess("");}}>Log In</button>
+                  <button type="button" className={`auth-tab ${authMode==="signup"?"on":""}`} onClick={()=>{setAuthMode("signup");setAuthError("");setAuthSuccess("");}}>Create Account</button>
                 </div>
               )}
 
@@ -3257,22 +3287,22 @@ export default function GolfPoolPro() {
                 <div>
                   <div className="fgrp">
                     <label className="label">Email Address</label>
-                    <input className="inp" type="email" name="email" autoComplete="email" placeholder="you@example.com" value={authEmail} onChange={e=>{setAuthEmail(e.target.value);setAuthError("");}}/>
+                    <input ref={loginEmailRef} className="inp" type="email" name="email" autoComplete="email" placeholder="you@example.com" value={authEmail} onChange={e=>{setAuthEmail(e.target.value);setAuthError("");}} onKeyDown={(e)=>handleAuthEnter(e,{nextRef:loginPassRef})}/>
                   </div>
                   <div className="fgrp">
                     <label className="label">Password</label>
-                    <input className="inp" type="password" name="password" autoComplete="current-password" placeholder="Your password" value={authPass} onChange={e=>{setAuthPass(e.target.value);setAuthError("");}}/>
+                    <input ref={loginPassRef} className="inp" type="password" name="password" autoComplete="current-password" placeholder="Your password" value={authPass} onChange={e=>{setAuthPass(e.target.value);setAuthError("");}} onKeyDown={(e)=>handleAuthEnter(e,{submit:handleLogin})}/>
                   </div>
                   {authError && <p style={{color:"var(--red)",fontSize:13,marginBottom:12,fontWeight:600}}>{authError}</p>}
-                  <button className="btn btn-gold" style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginBottom:14}} onClick={handleLogin} disabled={authBusy}>
+                  <button type="button" className="btn btn-gold" style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginBottom:14}} onClick={handleLogin} disabled={authBusy}>
                     {authBusy ? "Logging In..." : "Log In"}
                   </button>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                    <button className="btn-link" style={{fontSize:13}} onClick={()=>{setAuthMode("forgot");setAuthError("");setForgotSent(false);}}>
+                    <button type="button" className="btn-link" style={{fontSize:13}} onClick={()=>{setAuthMode("forgot");setAuthError("");setForgotSent(false);}}>
                       Forgot your password?
                     </button>
                     {currentUser && (
-                      <button className="btn-link" style={{fontSize:13}} onClick={()=>{setView("home");setActivePool(null);}}>
+                      <button type="button" className="btn-link" style={{fontSize:13}} onClick={()=>{setView("home");setActivePool(null);}}>
                         Back to Home
                       </button>
                     )}
@@ -3284,18 +3314,18 @@ export default function GolfPoolPro() {
                 <div>
                   <div className="fgrp">
                     <label className="label">Full Name</label>
-                    <input className="inp" name="name" autoComplete="name" placeholder="Your full name" value={authName} onChange={e=>{setAuthName(e.target.value);setAuthError("");}}/>
+                    <input ref={signupNameRef} className="inp" name="name" autoComplete="name" placeholder="Your full name" value={authName} onChange={e=>{setAuthName(e.target.value);setAuthError("");}} onKeyDown={(e)=>handleAuthEnter(e,{nextRef:signupEmailRef})}/>
                   </div>
                   <div className="fgrp">
                     <label className="label">Email Address</label>
-                    <input className="inp" type="email" name="email" autoComplete="email" placeholder="you@example.com" value={authEmail} onChange={e=>{setAuthEmail(e.target.value);setAuthError("");}}/>
+                    <input ref={signupEmailRef} className="inp" type="email" name="email" autoComplete="email" placeholder="you@example.com" value={authEmail} onChange={e=>{setAuthEmail(e.target.value);setAuthError("");}} onKeyDown={(e)=>handleAuthEnter(e,{nextRef:signupPassRef})}/>
                   </div>
                   <div className="fgrp">
                     <label className="label">Create Password</label>
-                    <input className="inp" type="password" name="new-password" autoComplete="new-password" placeholder="Min. 6 characters" value={authPass} onChange={e=>{setAuthPass(e.target.value);setAuthError("");}}/>
+                    <input ref={signupPassRef} className="inp" type="password" name="new-password" autoComplete="new-password" placeholder="Min. 6 characters" value={authPass} onChange={e=>{setAuthPass(e.target.value);setAuthError("");}} onKeyDown={(e)=>handleAuthEnter(e,{submit:handleSignup})}/>
                   </div>
                   {authError && <p style={{color:"var(--red)",fontSize:13,marginBottom:12,fontWeight:600}}>{authError}</p>}
-                  <button className="btn btn-gold" style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginBottom:12}} onClick={handleSignup} disabled={authBusy}>
+                  <button type="button" className="btn btn-gold" style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginBottom:12}} onClick={handleSignup} disabled={authBusy}>
                     {authBusy ? "Creating Account..." : "Create Account"}
                   </button>
                   <p style={{fontSize:11,color:"var(--muted)",textAlign:"center",lineHeight:1.5}}>
@@ -3303,7 +3333,7 @@ export default function GolfPoolPro() {
                   </p>
                   {currentUser && (
                     <div style={{marginTop:14,textAlign:"center"}}>
-                      <button className="btn-link" onClick={()=>{setView("home");setActivePool(null);}}>Back to Home</button>
+                      <button type="button" className="btn-link" onClick={()=>{setView("home");setActivePool(null);}}>Back to Home</button>
                     </div>
                   )}
                 </div>
@@ -3311,12 +3341,12 @@ export default function GolfPoolPro() {
 
               {authMode==="forgot" && (
                 <div>
-                  <button className="btn btn-ghost btn-sm" style={{marginBottom:16}} onClick={()=>setAuthMode("login")}>← Back to Login</button>
+                  <button type="button" className="btn btn-ghost btn-sm" style={{marginBottom:16}} onClick={()=>setAuthMode("login")}>← Back to Login</button>
                   <h3 className="h3" style={{marginBottom:6}}>Reset Your Password</h3>
                   <p className="sub" style={{marginBottom:20,fontSize:13}}>Enter your email address and we'll send you a link to reset your password.</p>
                   <div className="fgrp">
                     <label className="label">Email Address</label>
-                    <input className="inp" type="email" name="email" autoComplete="email" placeholder="you@example.com" value={authEmail} onChange={e=>{setAuthEmail(e.target.value);setAuthError("");}}/>
+                    <input ref={forgotEmailRef} className="inp" type="email" name="email" autoComplete="email" placeholder="you@example.com" value={authEmail} onChange={e=>{setAuthEmail(e.target.value);setAuthError("");}} onKeyDown={(e)=>handleAuthEnter(e,{submit:handleForgotPassword})}/>
                   </div>
                   {authError && <p style={{color:"var(--red)",fontSize:13,marginBottom:12,fontWeight:600}}>{authError}</p>}
                   {forgotSent ? (
@@ -3328,12 +3358,12 @@ export default function GolfPoolPro() {
                       </div>
                     </div>
                   ) : (
-                    <button className="btn btn-prim" style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginBottom:12}} onClick={handleForgotPassword} disabled={authBusy}>
+                    <button type="button" className="btn btn-prim" style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginBottom:12}} onClick={handleForgotPassword} disabled={authBusy}>
                       {authBusy ? "Sending..." : "Send Reset Link"}
                     </button>
                   )}
                   <div style={{textAlign:"center"}}>
-                    <button className="btn-link" onClick={()=>setAuthMode("login")}>Return to login</button>
+                    <button type="button" className="btn-link" onClick={()=>setAuthMode("login")}>Return to login</button>
                   </div>
                 </div>
               )}
@@ -3345,6 +3375,7 @@ export default function GolfPoolPro() {
                   <div className="fgrp">
                     <label className="label">New Password</label>
                     <input
+                      ref={resetPassRef}
                       className="inp"
                       type="password"
                       name="new-password"
@@ -3352,11 +3383,13 @@ export default function GolfPoolPro() {
                       placeholder="Min. 6 characters"
                       value={resetPass}
                       onChange={(e)=>{setResetPass(e.target.value);setAuthError("");}}
+                      onKeyDown={(e)=>handleAuthEnter(e,{nextRef:resetPassConfirmRef})}
                     />
                   </div>
                   <div className="fgrp">
                     <label className="label">Confirm Password</label>
                     <input
+                      ref={resetPassConfirmRef}
                       className="inp"
                       type="password"
                       name="confirm-password"
@@ -3364,11 +3397,13 @@ export default function GolfPoolPro() {
                       placeholder="Re-enter password"
                       value={resetPassConfirm}
                       onChange={(e)=>{setResetPassConfirm(e.target.value);setAuthError("");}}
+                      onKeyDown={(e)=>handleAuthEnter(e,{submit:handleResetPasswordFromLink})}
                     />
                   </div>
                   {authError && <p style={{color:"var(--red)",fontSize:13,marginBottom:12,fontWeight:600}}>{authError}</p>}
                   {authSuccess && <p style={{color:"var(--green)",fontSize:13,marginBottom:12,fontWeight:700}}>{authSuccess}</p>}
                   <button
+                    type="button"
                     className="btn btn-prim"
                     style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginBottom:12}}
                     onClick={handleResetPasswordFromLink}
@@ -3377,7 +3412,7 @@ export default function GolfPoolPro() {
                     {authBusy ? "Updating..." : "Update Password"}
                   </button>
                   <div style={{textAlign:"center"}}>
-                    <button className="btn-link" onClick={()=>{setAuthMode("login");setAuthError("");}}>Return to login</button>
+                    <button type="button" className="btn-link" onClick={()=>{setAuthMode("login");setAuthError("");}}>Return to login</button>
                   </div>
                 </div>
               )}
@@ -3416,14 +3451,16 @@ export default function GolfPoolPro() {
                   </div>
                   {authError && <p style={{color:"var(--red)",fontSize:13,marginBottom:12,fontWeight:600}}>{authError}</p>}
                   <button
+                    type="button"
                     className="btn btn-prim"
                     style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginBottom:10}}
                     onClick={handleJoinInvitedPool}
+                    disabled={authBusy}
                   >
-                    Join Pool
+                    {authBusy ? "Joining..." : "Join Pool"}
                   </button>
                   <div style={{textAlign:"center"}}>
-                    <button className="btn-link" onClick={()=>{setAuthMode("login");setAuthPass("");setAuthError("");setAuthSuccess("");}}>
+                    <button type="button" className="btn-link" onClick={()=>{setAuthMode("login");setAuthPass("");setAuthError("");setAuthSuccess("");}}>
                       Use a different account
                     </button>
                   </div>
