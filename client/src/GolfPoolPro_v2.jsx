@@ -101,7 +101,7 @@ select.inp{cursor:pointer}
 .hero-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 14px;border-radius:20px;background:rgba(200,169,79,.14);border:1px solid rgba(200,169,79,.28);color:var(--gold);font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:20px}
 .hero-title{font-family:'Cormorant Garamond',serif;font-size:60px;font-weight:700;color:#fff;line-height:1.06;margin-bottom:16px}
 .hero-title span{color:var(--gold)}
-.hero-logo{width:100%;max-width:700px;height:auto;display:block;margin:0 auto}
+.hero-logo{width:100%;max-width:700px;height:auto;display:block;margin:0 auto;mix-blend-mode:screen}
 .hero-sub{font-size:16px;color:rgba(255,255,255,.62);max-width:540px;margin:0 auto 36px;line-height:1.65}
 
 /* POOL CARD */
