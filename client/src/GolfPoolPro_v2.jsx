@@ -32,8 +32,9 @@ html,body{background:var(--cream);color:var(--text);font-family:'DM Sans',sans-s
 .nav{background:var(--forest);height:60px;display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:300;box-shadow:0 2px 20px rgba(0,0,0,.2)}
 .logo{font-family:'Cormorant Garamond',serif;font-size:20px;font-weight:700;color:var(--gold);cursor:pointer;letter-spacing:.2px}
 .logo em{color:#fff;font-style:normal}
-.logo-btn{display:inline-flex;align-items:center;justify-content:center;background:transparent;border:none;cursor:pointer;padding:0}
+.logo-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;background:transparent;border:none;cursor:pointer;padding:0 4px;color:#dfe9df;font-weight:700}
 .logo-icon{width:34px;height:42px;display:block}
+.logo-home-text{font-size:15px;letter-spacing:.03em}
 .nav-links{display:flex;gap:2px}
 .ntab{padding:6px 13px;border-radius:7px;border:none;background:transparent;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;color:rgba(255,255,255,.5);cursor:pointer;transition:all .16s}
 .ntab:hover{color:#fff;background:rgba(255,255,255,.08)}
@@ -1785,8 +1786,9 @@ export default function GolfPoolPro() {
         {view!=="invite" && (
           <>
           <nav className="nav">
-            <button className="logo-btn" type="button" onClick={()=>{setView("home");setActivePool(null);}} aria-label="GolfPoolPro home">
+            <button className="logo-btn" type="button" onClick={()=>{setView("home");setActivePool(null);}} aria-label="Home">
               <img className="logo-icon" src="/logo-icon-v2.svg" alt="GolfPoolPro icon" />
+              <span className="logo-home-text">Home</span>
             </button>
             <div style={{display:"flex",alignItems:"center",gap:8,position:"relative"}} ref={userMenuRef}>
               <button
@@ -1888,7 +1890,7 @@ export default function GolfPoolPro() {
           <div>
             <div className="hero">
               <div style={{position:"relative",zIndex:1}}>
-                <img className="hero-logo" src="/logo-primary-dark-v2.png" alt="GolfPoolPro" />
+                <img className="hero-logo" src="/logo-primary-dark-v3.jpg" alt="GolfPoolPro" />
               </div>
             </div>
             <div className="page">
