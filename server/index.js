@@ -615,6 +615,11 @@ async function fetchDataGolfFieldPlayers(tournament) {
 
   const toursToTry = Array.from(new Set([
     DATAGOLF_TOUR,
+    // Majors sometimes don't show up under the expected tour code.
+    // These are safe to try (unsupported ones will just 4xx and be skipped).
+    "majors",
+    "major",
+    "maj",
     "upcoming_pga",
     "pga",
     "opp",
@@ -688,11 +693,16 @@ async function fetchDataGolfFieldPlayers(tournament) {
         .concat(Array.isArray(scheduleJson) ? scheduleJson : [])
         .filter((x) => x && typeof x === "object");
       const bestEvent = pickBestDataGolfEvent(scheduleItems, tournament);
-      const rawEventId = bestEvent?.event_id ?? bestEvent?.eventId ?? bestEvent?.id ?? null;
-      const rawStr = String(rawEventId || "").trim();
-      // DataGolf sometimes uses "TBD" placeholders. Never treat those as matchable event_ids.
-      scheduleEventId = rawStr && !/^tbd$/i.test(rawStr) ? rawEventId : null;
-      scheduleEventName = scheduleEventName || bestEvent?.event_name || bestEvent?.name || null;
+      const bestName = bestEvent?.event_name || bestEvent?.name || "";
+      // IMPORTANT: Only trust this schedule match if the name strongly matches.
+      // If a given schedule feed excludes majors, "closest-by-date" will be the wrong event.
+      if (bestName && strongNameMatch(bestName, tournament?.name || "")) {
+        const rawEventId = bestEvent?.event_id ?? bestEvent?.eventId ?? bestEvent?.dg_event_id ?? bestEvent?.dgEventId ?? bestEvent?.id ?? null;
+        const rawStr = String(rawEventId || "").trim();
+        // DataGolf sometimes uses "TBD" placeholders. Never treat those as matchable event_ids.
+        scheduleEventId = rawStr && !/^tbd$/i.test(rawStr) ? rawEventId : null;
+        scheduleEventName = scheduleEventName || bestName || null;
+      }
     } catch {}
   }
   if (scheduleEventId && !scheduleEventName) scheduleEventName = tournament?.name || null;
@@ -736,7 +746,7 @@ async function fetchDataGolfFieldPlayers(tournament) {
 
   // DataGolf's `field-updates` endpoint sometimes returns a flat list of rows (one per player)
   // with `event_id`/`event_name` repeated per row. In that case we need to group rows by event.
-  const getRowEventId = (r) => r?.event_id ?? r?.eventId ?? r?.tournament_id ?? r?.tournamentId ?? r?.id ?? null;
+  const getRowEventId = (r) => r?.event_id ?? r?.eventId ?? r?.dg_event_id ?? r?.dgEventId ?? r?.tournament_id ?? r?.tournamentId ?? r?.dg_tournament_id ?? r?.dgTournamentId ?? r?.id ?? null;
   const getRowEventName = (r) => r?.event_name || r?.eventName || r?.event || r?.tournament_name || r?.tournament || r?.name || "";
   const getRowEventDate = (r) => r?.start_date || r?.startDate || r?.event_start_date || r?.date || r?.start || r?.starts_at || "";
   const looksLikeFlatPlayerRow = (r) => {
@@ -770,7 +780,9 @@ async function fetchDataGolfFieldPlayers(tournament) {
     // Best: match by event_id from the schedule, when possible.
     if (scheduleEventId) {
       const direct = groups.get(`id:${String(scheduleEventId).trim()}`) || null;
-      if (direct) {
+      // Protect against schedule mismatches (especially majors) where the schedule feed can
+      // return the closest-by-date event rather than the actual intended tournament.
+      if (direct && strongNameMatch(direct.event_name || "", strictName)) {
         const players = coercePlayers(direct.rows);
         if (players.length) return { players, event_id: direct.event_id };
       }
@@ -844,7 +856,7 @@ async function fetchDataGolfFieldPlayers(tournament) {
         bestScore = score;
         best = ev;
         bestPlayers = players;
-        bestEventId = ev?.event_id ?? ev?.eventId ?? ev?.id ?? null;
+        bestEventId = ev?.event_id ?? ev?.eventId ?? ev?.dg_event_id ?? ev?.dgEventId ?? ev?.id ?? null;
       }
     }
     return { best, players: bestPlayers, event_id: bestEventId };
@@ -884,9 +896,15 @@ async function fetchDataGolfFieldPlayers(tournament) {
             : Array.isArray(json.data) ? json.data
               : [];
         const match = (events || []).find((ev) =>
-          String(ev?.event_id ?? ev?.eventId ?? ev?.id ?? "") === String(scheduleEventId)
+          String(ev?.event_id ?? ev?.eventId ?? ev?.dg_event_id ?? ev?.dgEventId ?? ev?.id ?? "") === String(scheduleEventId)
         );
         if (match) {
+          const matchName = match?.event_name || match?.eventName || match?.name || match?.tournament_name || match?.tournament || "";
+          if (matchName && tournament?.name && !strongNameMatch(matchName, tournament.name)) {
+            // Ignore this "id match" if it clearly isn't the intended tournament.
+            // This prevents majors from being mapped to the wrong PGA week when schedules differ.
+            // Fall through to the name/date matching logic below.
+          } else {
           const rawList =
             (Array.isArray(match.field) && match.field) ||
             (Array.isArray(match.players) && match.players) ||
@@ -897,6 +915,7 @@ async function fetchDataGolfFieldPlayers(tournament) {
           if (players.length) {
             const enriched = await enrichPlayersFromDataGolfRefs(players);
             return { players: enriched, provider: "DataGolf", url, urlsTried, event_id: String(scheduleEventId) };
+          }
           }
         }
       }
