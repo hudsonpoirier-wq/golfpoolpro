@@ -505,8 +505,12 @@ async function datagolfFetchText(url) {
   const resp = await fetch(url, {
     timeout: 12000,
     headers: {
-      "user-agent": "GolfPoolProBot/1.0 (+https://golfpoolpro.vercel.app)",
+      // Use browser-like headers to avoid receiving a JS-only shell or bot-block page.
+      "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
       accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "accept-language": "en-US,en;q=0.9",
+      "upgrade-insecure-requests": "1",
+      referer: "https://datagolf.com/",
     },
   });
   if (!resp.ok) throw new Error(`DataGolf site returned ${resp.status}`);
@@ -784,9 +788,20 @@ async function fetchDataGolfMajorFieldPlayers(tournament) {
   const major = majorParamFromTournamentName(tournament?.name || "");
   if (!major) return { players: [], provider: "DataGolf major-fields", urlsTried: [], error: "Not a supported major." };
 
-  const url = `https://datagolf.com/major-fields?major=${encodeURIComponent(major)}`;
+  // Cache-bust at an hourly granularity so we don't get stuck with a cached "shell" or block page.
+  const cacheBuster = Math.floor(Date.now() / (60 * 60 * 1000));
+  const url = `https://datagolf.com/major-fields?major=${encodeURIComponent(major)}&_=${cacheBuster}`;
   try {
     const html = await datagolfFetchText(url);
+    const lowerHtml = String(html || "").toLowerCase();
+    if (/(cloudflare|cf-ray|attention required|captcha|verify you are human)/i.test(lowerHtml)) {
+      return {
+        players: [],
+        provider: "DataGolf major-fields (scrape)",
+        urlsTried: [url],
+        error: "DataGolf page appears to be bot-protected (captcha/block page).",
+      };
+    }
 
     // Try: Next.js/SSR JSON blob.
     let playerObjs = [];
@@ -797,6 +812,28 @@ async function fetchDataGolfMajorFieldPlayers(tournament) {
         const projected = pickProjectedFieldArrayFromNextData(major, json);
         if (Array.isArray(projected) && projected.length) playerObjs = projected;
       } catch {}
+    }
+
+    // Try: Next.js data route (works even when the SSR HTML doesn't include the full dataset).
+    // Example: https://datagolf.com/_next/data/<buildId>/major-fields.json?major=masters
+    if (!playerObjs.length) {
+      const buildIdMatch =
+        html.match(/\"buildId\"\s*:\s*\"([^\"]+)\"/i) ||
+        html.match(/\/_next\/static\/([^/]+)\/_buildManifest\.js/i) ||
+        html.match(/\/_next\/static\/([^/]+)\/_ssgManifest\.js/i);
+      const buildId = buildIdMatch && buildIdMatch[1] ? String(buildIdMatch[1]) : null;
+      if (buildId) {
+        try {
+          const dataUrl = `https://datagolf.com/_next/data/${encodeURIComponent(buildId)}/major-fields.json?major=${encodeURIComponent(major)}`;
+          const json = await datagolfFetchJson(dataUrl);
+          const projected = pickProjectedFieldArrayFromNextData(major, json);
+          if (Array.isArray(projected) && projected.length) {
+            playerObjs = projected;
+          } else {
+            playerObjs = extractPlayersFromAnyJson(json);
+          }
+        } catch {}
+      }
     }
 
     const sliceProjectedSection = (s) => {
@@ -922,21 +959,14 @@ async function fetchDataGolfFieldPlayers(tournament) {
   const targetName = normKey(tournament?.name || "");
   const targetDate = tournament?.start_date || "";
 
-  const toursToTry = Array.from(new Set([
-    DATAGOLF_TOUR,
-    // Majors sometimes don't show up under the expected tour code.
-    // These are safe to try (unsupported ones will just 4xx and be skipped).
-    "majors",
-    "major",
-    "maj",
-    "upcoming_pga",
-    "pga",
-    "opp",
-    "euro",
-    "kft",
-    "alt",
-    "all", // undocumented, but harmless to try if supported
-  ].map((t) => String(t || "").toLowerCase()).filter(Boolean)));
+  // DataGolf `field-updates` supports specific tour codes (per DataGolf docs).
+  // Trying unsupported codes wastes quota and makes failures harder to reason about.
+  const FIELD_UPDATES_TOURS = new Set(["pga", "upcoming_pga", "opp", "euro", "kft", "alt"]);
+  const toursToTry = Array.from(new Set(
+    [DATAGOLF_TOUR, "pga", "upcoming_pga", "opp", "euro", "kft", "alt"]
+      .map((t) => String(t || "").toLowerCase())
+      .filter((t) => FIELD_UPDATES_TOURS.has(t))
+  ));
 
   const urlsTried = [];
   let scheduleEventId = null;
@@ -1992,6 +2022,128 @@ app.post("/api/admin/field-reset/:tournamentId", async (req, res, next) => {
     });
   } catch (e) {
     return next(e);
+  }
+});
+
+// Debug endpoints to understand DataGolf payload shapes without exposing secrets.
+app.get("/api/admin/datagolf/field-updates-debug", async (req, res) => {
+  const required = process.env.ADMIN_TOKEN;
+  if (required && req.headers["x-admin-token"] !== required) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  if (!DATAGOLF_API_KEY) return res.status(400).json({ error: "DATAGOLF_API_KEY not set." });
+
+  const tour = String(req.query.tour || "pga").toLowerCase();
+  const url = `${DATAGOLF_BASE_URL}/field-updates?tour=${encodeURIComponent(tour)}&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
+  try {
+    const json = await datagolfFetchJson(url);
+
+    // Best-effort: detect "flat rows" vs event objects.
+    const isFlatRows = Array.isArray(json) && json.length && typeof json[0] === "object" && (json[0].player_name || json[0].name) && (json[0].event_id || json[0].event_name);
+
+    const rows = [];
+    const pushEv = (ev, players) => {
+      if (!ev || typeof ev !== "object") return;
+      const event_id = ev.event_id ?? ev.eventId ?? ev.dg_event_id ?? ev.dgEventId ?? ev.id ?? null;
+      const event_name = ev.event_name ?? ev.eventName ?? ev.name ?? ev.tournament_name ?? ev.tournament ?? null;
+      const start_date = ev.start_date ?? ev.startDate ?? ev.event_start_date ?? ev.date ?? null;
+      const count = Array.isArray(players) ? players.length : 0;
+      rows.push({ event_id, event_name, start_date, count });
+    };
+
+    if (isFlatRows) {
+      const by = new Map();
+      for (const r of json.slice(0, 5000)) {
+        const eid = r.event_id ?? r.eventId ?? r.dg_event_id ?? r.dgEventId ?? null;
+        const en = r.event_name ?? r.eventName ?? r.event ?? r.tournament_name ?? r.tournament ?? r.name ?? null;
+        const key = eid != null ? `id:${String(eid)}` : (en ? `name:${normKey(en)}` : null);
+        if (!key) continue;
+        const g = by.get(key) || { event_id: eid, event_name: en, start_date: r.start_date ?? r.startDate ?? r.date ?? null, count: 0 };
+        g.count += 1;
+        by.set(key, g);
+      }
+      const events = Array.from(by.values())
+        .sort((a, b) => (b.count || 0) - (a.count || 0))
+        .slice(0, 30);
+      return res.json({
+        provider: "DataGolf",
+        tour,
+        shape: "flat_rows",
+        url: redactUrlSecrets(url),
+        events,
+      });
+    }
+
+    const events =
+      (Array.isArray(json?.events) && json.events) ||
+      (Array.isArray(json?.tournaments) && json.tournaments) ||
+      (Array.isArray(json?.data) && json.data) ||
+      (Array.isArray(json) ? json : []);
+
+    for (const ev of (events || []).slice(0, 200)) {
+      const players =
+        (Array.isArray(ev?.field) && ev.field) ||
+        (Array.isArray(ev?.players) && ev.players) ||
+        (Array.isArray(ev?.entries) && ev.entries) ||
+        (Array.isArray(ev?.data) && ev.data) ||
+        [];
+      pushEv(ev, players);
+    }
+
+    rows.sort((a, b) => (b.count || 0) - (a.count || 0));
+    return res.json({
+      provider: "DataGolf",
+      tour,
+      shape: "events",
+      url: redactUrlSecrets(url),
+      events: rows.slice(0, 30),
+      topLevelKeys: (json && typeof json === "object" && !Array.isArray(json)) ? Object.keys(json).slice(0, 30) : null,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e?.message || String(e), url: redactUrlSecrets(url) });
+  }
+});
+
+app.get("/api/admin/datagolf/major-fields-debug", async (req, res) => {
+  const required = process.env.ADMIN_TOKEN;
+  if (required && req.headers["x-admin-token"] !== required) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const major = String(req.query.major || "masters").toLowerCase();
+  const bust = String(req.query.bust || "").toLowerCase() === "1";
+  const cacheBuster = bust ? Math.floor(Date.now() / (60 * 60 * 1000)) : null;
+  const url = cacheBuster != null
+    ? `https://datagolf.com/major-fields?major=${encodeURIComponent(major)}&_=${cacheBuster}`
+    : `https://datagolf.com/major-fields?major=${encodeURIComponent(major)}`;
+  try {
+    const html = await datagolfFetchText(url);
+    const lower = html.toLowerCase();
+    const nextMatch = html.match(/<script[^>]+id=\"__NEXT_DATA__\"[^>]*>([\s\S]*?)<\/script>/i);
+    const hasNextData = !!(nextMatch && nextMatch[1] && nextMatch[1].trim().startsWith("{"));
+    let nextSize = null;
+    if (hasNextData) {
+      try {
+        const json = JSON.parse(nextMatch[1]);
+        const proj = pickProjectedFieldArrayFromNextData(major, json);
+        nextSize = Array.isArray(proj) ? proj.length : 0;
+      } catch {
+        nextSize = -1;
+      }
+    }
+    return res.json({
+      provider: "DataGolf",
+      url,
+      html_bytes: Buffer.byteLength(html || "", "utf8"),
+      has_next_data: hasNextData,
+      projected_array_len: nextSize,
+      has_projected_field_text: lower.includes("projected field"),
+      has_player_name_key: lower.includes("\"player_name\""),
+      has_dg_id_key: lower.includes("\"dg_id\"") || lower.includes("\"dgid\""),
+      preview: html.slice(0, 200),
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e?.message || String(e), url });
   }
 });
 
