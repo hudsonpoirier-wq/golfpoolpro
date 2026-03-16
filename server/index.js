@@ -815,7 +815,10 @@ async function fetchDataGolfFieldPlayers(tournament) {
 
   const pickBestEventFromPayload = (json) => {
     const scheduleName = normKey(scheduleEventName || "");
-    const strictName = scheduleEventId ? (scheduleEventName || tournament?.name || "") : "";
+    // Never "guess" an event purely by date when we're importing a field.
+    // If DataGolf doesn't publish the event in this payload yet, we'd rather return no field
+    // than import the wrong tournament's players (common failure mode for majors).
+    const strictName = scheduleEventName || tournament?.name || "";
     const candidates = [];
     if (Array.isArray(json)) candidates.push(...json);
     if (json && typeof json === "object") {
