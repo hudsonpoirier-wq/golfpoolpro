@@ -713,7 +713,7 @@ export default function GolfPoolPro() {
 
   // Config for new pool creation
   const [config,setConfig] = useState({
-    poolName:"Sunday Showdown",tournament:"",maxParticipants:8,
+    poolName:"Sunday Showdown",tournament:"",maxParticipants:6,
     teamSize:4,scoringGolfers:2,cutLine:2,shotClock:60,draftOrderType:"ordered",
   });
   const [pendingInviteToken, setPendingInviteToken] = useState(() => makeInviteToken());
@@ -830,7 +830,7 @@ export default function GolfPoolPro() {
           id: resolved.id,
           name: resolved.name || "Pool Invite",
           status: resolved.status || "lobby",
-          maxParticipants: resolved.max_participants || 8,
+          maxParticipants: resolved.max_participants || 6,
           participants: resolved.current_members || 0,
           teamSize: resolved.team_size || 4,
           scoringGolfers: resolved.scoring_golfers || 2,
@@ -850,7 +850,7 @@ export default function GolfPoolPro() {
             inviteToken: token,
             status: "lobby",
             participants: 0,
-            maxParticipants: 8,
+            maxParticipants: 6,
             teamSize: 4,
             scoringGolfers: 2,
             cutLine: 2,
@@ -3082,13 +3082,13 @@ export default function GolfPoolPro() {
                   <div className="fgrp">
                     <label className="label">Max Participants</label>
                     <select className="inp" value={config.maxParticipants} onChange={e=>setConfig(c=>({...c,maxParticipants:+e.target.value}))}>
-                      {[4,6,8,10,12,16,20].map(n=><option key={n} value={n}>{n} participants</option>)}
+                      {[2,3,4,5,6].map(n=><option key={n} value={n}>{n} participant{n===1?"":"s"}</option>)}
                     </select>
                   </div>
                   <div className="fgrp">
                     <label className="label">Golfers Per Team</label>
                     <select className="inp" value={config.teamSize} onChange={e=>setConfig(c=>({...c,teamSize:+e.target.value,scoringGolfers:Math.min(config.scoringGolfers,+e.target.value)}))}>
-                      {[2,3,4,5,6].map(n=><option key={n} value={n}>{n} golfers per team</option>)}
+                      {[4,5,6,7,8].map(n=><option key={n} value={n}>{n} golfers per team</option>)}
                     </select>
                   </div>
                 </div>

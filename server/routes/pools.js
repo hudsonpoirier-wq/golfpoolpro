@@ -3,6 +3,15 @@
 const router = require("express").Router();
 const { requireAuth } = require("../middleware/auth");
 
+const MIN_PARTICIPANTS = 2;
+const MAX_PARTICIPANTS = 6;
+const MIN_TEAM_SIZE = 4;
+const MAX_TEAM_SIZE = 8;
+
+function isInt(n) {
+  return Number.isInteger(n) && Number.isFinite(n);
+}
+
 const LOBBY_TTL_MS = 15000;
 const lobbyPresence = new Map(); // poolId -> Map(userId -> lastSeenMs)
 
@@ -185,7 +194,7 @@ router.post("/", requireAuth, async (req, res, next) => {
   try {
     const sb = req.app.locals.supabase;
     const {
-      name, tournament_id, max_participants = 8,
+      name, tournament_id, max_participants = 6,
       team_size = 4, scoring_golfers = 2,
       cut_line = 2, shot_clock = 60,
     } = req.body;
@@ -193,15 +202,29 @@ router.post("/", requireAuth, async (req, res, next) => {
     if (!name?.trim()) return res.status(400).json({ error: "Pool name is required." });
     if (!tournament_id) return res.status(400).json({ error: "Tournament is required." });
 
+    const mp = Number(max_participants);
+    const ts = Number(team_size);
+    const sg = Number(scoring_golfers);
+
+    if (!isInt(mp) || mp < MIN_PARTICIPANTS || mp > MAX_PARTICIPANTS) {
+      return res.status(400).json({ error: `max_participants must be an integer between ${MIN_PARTICIPANTS} and ${MAX_PARTICIPANTS}.` });
+    }
+    if (!isInt(ts) || ts < MIN_TEAM_SIZE || ts > MAX_TEAM_SIZE) {
+      return res.status(400).json({ error: `team_size must be an integer between ${MIN_TEAM_SIZE} and ${MAX_TEAM_SIZE}.` });
+    }
+    if (!isInt(sg) || sg < 1 || sg > ts) {
+      return res.status(400).json({ error: "scoring_golfers must be an integer between 1 and team_size." });
+    }
+
     const { data: pool, error } = await sb
       .from("pools")
       .insert({
         name: name.trim(),
         tournament_id,
         host_id: req.user.id,
-        max_participants,
-        team_size,
-        scoring_golfers,
+        max_participants: mp,
+        team_size: ts,
+        scoring_golfers: sg,
         cut_line,
         shot_clock,
         status: "lobby",
@@ -230,6 +253,36 @@ router.patch("/:id", requireAuth, async (req, res, next) => {
 
     const allowed = ["name","status","max_participants","team_size","scoring_golfers","cut_line","shot_clock"];
     const updates = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)));
+
+    if (Object.prototype.hasOwnProperty.call(updates, "max_participants")) {
+      const mp = Number(updates.max_participants);
+      if (!isInt(mp) || mp < MIN_PARTICIPANTS || mp > MAX_PARTICIPANTS) {
+        return res.status(400).json({ error: `max_participants must be an integer between ${MIN_PARTICIPANTS} and ${MAX_PARTICIPANTS}.` });
+      }
+      updates.max_participants = mp;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, "team_size")) {
+      const ts = Number(updates.team_size);
+      if (!isInt(ts) || ts < MIN_TEAM_SIZE || ts > MAX_TEAM_SIZE) {
+        return res.status(400).json({ error: `team_size must be an integer between ${MIN_TEAM_SIZE} and ${MAX_TEAM_SIZE}.` });
+      }
+      updates.team_size = ts;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, "scoring_golfers")) {
+      const sg = Number(updates.scoring_golfers);
+      const effectiveTeamSize = Object.prototype.hasOwnProperty.call(updates, "team_size")
+        ? updates.team_size
+        : null;
+      if (!isInt(sg) || sg < 1) {
+        return res.status(400).json({ error: "scoring_golfers must be a positive integer." });
+      }
+      if (effectiveTeamSize !== null && sg > effectiveTeamSize) {
+        return res.status(400).json({ error: "scoring_golfers must be an integer between 1 and team_size." });
+      }
+      updates.scoring_golfers = sg;
+    }
 
     const { data, error } = await sb.from("pools").update(updates).eq("id", id).select().single();
     if (error) return res.status(400).json({ error: error.message });
