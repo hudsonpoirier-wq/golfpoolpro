@@ -404,6 +404,16 @@ function dateDistanceDays(a, b) {
   return Math.abs(Math.round((da.getTime() - db.getTime()) / 86400000));
 }
 
+function redactUrlSecrets(url) {
+  const u = String(url || "");
+  if (!u) return u;
+  // Basic query redaction (avoid leaking API keys in debug responses).
+  return u
+    .replace(/([?&]key=)[^&]+/gi, "$1REDACTED")
+    .replace(/([?&]api_key=)[^&]+/gi, "$1REDACTED")
+    .replace(/([?&]token=)[^&]+/gi, "$1REDACTED");
+}
+
 // ─── DataGolf (Scratch Plus) – upcoming tournament fields/tee times ─────────
 const DATAGOLF_API_KEY = process.env.DATAGOLF_API_KEY || "";
 const DATAGOLF_BASE_URL = (process.env.DATAGOLF_BASE_URL || "https://feeds.datagolf.com").replace(/\/+$/, "");
@@ -412,6 +422,10 @@ const DATAGOLF_CACHE_TTL_MS = Number(process.env.DATAGOLF_CACHE_TTL_MS || 10 * 6
 const DATAGOLF_RATE_LIMIT_PER_MIN = Number(process.env.DATAGOLF_RATE_LIMIT_PER_MIN || 45);
 const DATAGOLF_STATE = { minuteKey: null, minuteCount: 0, nextAllowedAtMs: 0 };
 const DATAGOLF_CACHE = new Map(); // url -> { ts, json }
+
+// Cache for DataGolf site HTML (e.g., projected major fields page).
+const DATAGOLF_SITE_CACHE_TTL_MS = Number(process.env.DATAGOLF_SITE_CACHE_TTL_MS || 10 * 60 * 1000); // 10m
+const DATAGOLF_SITE_CACHE = new Map(); // url -> { ts, text }
 
 // Longer-lived, normalized DataGolf reference data (player list + rankings)
 // Used to ensure projected fields include the right names/countries and have stable OWGR sorting.
@@ -471,6 +485,34 @@ async function datagolfFetchJson(url) {
   const json = await resp.json();
   DATAGOLF_CACHE.set(url, { ts: Date.now(), json });
   return json;
+}
+
+async function datagolfFetchText(url) {
+  const cached = DATAGOLF_SITE_CACHE.get(url);
+  if (cached && Date.now() - cached.ts < DATAGOLF_SITE_CACHE_TTL_MS) return cached.text;
+
+  // Reuse the same rate limiter to avoid bursts.
+  const decision = datagolfCanCall();
+  if (!decision.ok) {
+    if (decision.reason === "spacing" && decision.retryAfterMs && decision.retryAfterMs < 2500) {
+      await sleepMs(decision.retryAfterMs);
+    } else {
+      throw new Error("DataGolf rate limit/spacing in effect.");
+    }
+  }
+  datagolfRegisterCall();
+
+  const resp = await fetch(url, {
+    timeout: 12000,
+    headers: {
+      "user-agent": "GolfPoolProBot/1.0 (+https://golfpoolpro.vercel.app)",
+      accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    },
+  });
+  if (!resp.ok) throw new Error(`DataGolf site returned ${resp.status}`);
+  const text = await resp.text();
+  DATAGOLF_SITE_CACHE.set(url, { ts: Date.now(), text });
+  return text;
 }
 
 function pickFirstArray(json, keys) {
@@ -624,6 +666,132 @@ function pickBestDataGolfEvent(scheduleItems, tournament) {
     if (score < bestScore) { bestScore = score; best = ev; }
   }
   return best;
+}
+
+function majorParamFromTournamentName(name) {
+  const n = normKey(name);
+  if (!n) return null;
+  if (n.includes("masters")) return "masters";
+  if (n.includes("pga champ")) return "pga";
+  if (n.includes("u s open") || n.includes("us open")) return "us_open";
+  if (n.includes("open champ") || n === "the open" || n.includes("the open")) return "open";
+  return null;
+}
+
+function extractPlayersFromAnyJson(node) {
+  const out = [];
+  const seen = new Set();
+  const walk = (x, depth) => {
+    if (!x || depth > 8) return;
+    if (Array.isArray(x)) {
+      for (const el of x) walk(el, depth + 1);
+      return;
+    }
+    if (typeof x !== "object") return;
+    if (seen.has(x)) return;
+    seen.add(x);
+
+    // If this object looks like a player.
+    const rawName = x.player_name || x.full_name || x.name || x.player || x.playerName;
+    const rawId = x.dg_id ?? x.dgid ?? x.datagolf_id ?? x.player_id ?? x.id;
+    if (rawName || rawId) out.push(x);
+
+    for (const v of Object.values(x)) walk(v, depth + 1);
+  };
+  walk(node, 0);
+  return out;
+}
+
+async function fetchDataGolfMajorFieldPlayers(tournament) {
+  const major = majorParamFromTournamentName(tournament?.name || "");
+  if (!major) return { players: [], provider: "DataGolf major-fields", urlsTried: [], error: "Not a supported major." };
+
+  const url = `https://datagolf.com/major-fields?major=${encodeURIComponent(major)}`;
+  try {
+    const html = await datagolfFetchText(url);
+
+    // Try: Next.js/SSR JSON blob.
+    let playerObjs = [];
+    const nextDataMatch = html.match(/<script[^>]+id=\"__NEXT_DATA__\"[^>]*>([\s\S]*?)<\/script>/i);
+    if (nextDataMatch && nextDataMatch[1]) {
+      try {
+        const json = JSON.parse(nextDataMatch[1]);
+        playerObjs = extractPlayersFromAnyJson(json);
+      } catch {}
+    }
+
+    // Try: JSON-ish patterns in page source.
+    if (!playerObjs.length) {
+      const matches = [];
+      const re = /\"player_name\"\s*:\s*\"([^\"]+)\"/g;
+      let m = null;
+      while ((m = re.exec(html))) {
+        if (m[1]) matches.push({ player_name: m[1] });
+        if (matches.length > 2000) break;
+      }
+      playerObjs = matches;
+    }
+
+    // Fallback: Pull likely names from table cells.
+    if (!playerObjs.length) {
+      const candidates = [];
+      const tdRe = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+      let m = null;
+      while ((m = tdRe.exec(html))) {
+        const raw = String(m[1] || "")
+          .replace(/<[^>]+>/g, " ")
+          .replace(/&amp;/g, "&")
+          .replace(/&quot;/g, "\"")
+          .replace(/&#39;/g, "'")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (!raw) continue;
+        if (raw.length < 6 || raw.length > 40) continue;
+        if (!/[a-z]/i.test(raw) || !/\s/.test(raw)) continue;
+        // Skip obvious non-names.
+        if (/projected field|exemption|locked|owgr|rank|country|eligible/i.test(raw)) continue;
+        candidates.push({ player_name: raw });
+        if (candidates.length > 1000) break;
+      }
+      playerObjs = candidates;
+    }
+
+    const rawPlayers = playerObjs
+      .map((p) => ({
+        id: Number(p.dg_id ?? p.dgid ?? p.datagolf_id ?? p.player_id ?? p.id) || null,
+        name: normalizePlayerName(p.player_name || p.full_name || p.name || p.player || p.playerName || ""),
+      }))
+      .filter((p) => p.id || p.name);
+
+    // Prefer mapping scraped names to DataGolf ids using the official player list.
+    const listMap = await getDataGolfPlayerListMap(); // dg_id -> { name, country }
+    const nameToId = new Map();
+    for (const [dgId, meta] of listMap.entries()) {
+      const k = normKey(meta?.name || "");
+      if (k && !nameToId.has(k)) nameToId.set(k, dgId);
+    }
+
+    const players = rawPlayers
+      .map((p) => {
+        const k = normKey(p.name);
+        const dgId = (Number(p.id) > 0) ? Number(p.id) : (k && nameToId.get(k) ? Number(nameToId.get(k)) : null);
+        const meta = dgId && listMap.has(dgId) ? listMap.get(dgId) : null;
+        return {
+          id: dgId || null,
+          name: meta?.name || p.name,
+          country: meta?.country || null,
+          world_rank: null,
+        };
+      })
+      .filter((p) => p?.name);
+
+    const enriched = await enrichPlayersFromDataGolfRefs(players);
+    return { players: enriched, provider: "DataGolf major-fields (scrape)", urlsTried: [url], error: null };
+  } catch (e) {
+    return { players: [], provider: "DataGolf major-fields (scrape)", urlsTried: [url], error: e?.message || String(e) };
+  }
 }
 
 async function fetchDataGolfFieldPlayers(tournament) {
@@ -948,6 +1116,19 @@ async function fetchDataGolfFieldPlayers(tournament) {
         return { players, provider: "DataGolf", url, urlsTried, event_id: out.event_id || null };
       }
     } catch {}
+  }
+
+  // Majors: DataGolf sometimes publishes projected majors fields via the site page earlier than `field-updates`.
+  // As a last resort, scrape the major fields page for names and map them back to DG ids via get-player-list.
+  const majorFallback = await fetchDataGolfMajorFieldPlayers(tournament);
+  if (majorFallback.players?.length) {
+    return {
+      players: majorFallback.players,
+      provider: majorFallback.provider,
+      url: null,
+      urlsTried: [...urlsTried, ...(majorFallback.urlsTried || [])],
+      event_id: null,
+    };
   }
 
   return { players: [], provider: "DataGolf", urlsTried, error: "No matching projected field found in DataGolf field-updates yet." };
@@ -1486,7 +1667,14 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
     // 0) DataGolf first (best for upcoming fields)
     if (!players.length) {
       const dg = await fetchDataGolfFieldPlayers(tournament);
-      debug.push({ provider: dg.provider || "DataGolf", url: dg.url || null, urlsTried: dg.urlsTried || [], count: dg.players?.length || 0, error: dg.error || null, event_id: dg.event_id || null });
+      debug.push({
+        provider: dg.provider || "DataGolf",
+        url: dg.url ? redactUrlSecrets(dg.url) : null,
+        urlsTried: (dg.urlsTried || []).map(redactUrlSecrets),
+        count: dg.players?.length || 0,
+        error: dg.error || null,
+        event_id: dg.event_id || null,
+      });
       if (dg.players?.length) {
         players = dg.players;
         source = "DataGolf";
@@ -1499,7 +1687,13 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
     // 1) Sportradar first (if configured)
     if (!players.length && !lockedToPrimary) {
       const sr = await fetchSportradarFieldPlayers(tournament);
-      debug.push({ provider: "Sportradar", url: sr.url || null, urlsTried: sr.urlsTried || [], count: sr.players?.length || 0, error: sr.error || null });
+      debug.push({
+        provider: "Sportradar",
+        url: sr.url ? redactUrlSecrets(sr.url) : null,
+        urlsTried: (sr.urlsTried || []).map(redactUrlSecrets),
+        count: sr.players?.length || 0,
+        error: sr.error || null,
+      });
       if (sr.players?.length) {
         players = sr.players;
         source = "Sportradar";
@@ -1509,7 +1703,13 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
     // 2) BallDontLie PGA
     if (!players.length && !lockedToPrimary) {
       const bdl = await fetchBallDontLieFieldPlayers(tournament);
-      debug.push({ provider: "BallDontLie", url: bdl.url || null, urlsTried: bdl.urlsTried || [], count: bdl.players?.length || 0, error: bdl.error || null });
+      debug.push({
+        provider: "BallDontLie",
+        url: bdl.url ? redactUrlSecrets(bdl.url) : null,
+        urlsTried: (bdl.urlsTried || []).map(redactUrlSecrets),
+        count: bdl.players?.length || 0,
+        error: bdl.error || null,
+      });
       if (bdl.players?.length) {
         players = bdl.players;
         source = bdl.provider || "BallDontLie";
@@ -1538,13 +1738,25 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
         source = source === "unknown" ? "TheSportsDB" : `${source}+TheSportsDB`;
         importedEventId = String(eventId);
       }
-      debug.push({ provider: "TheSportsDB", url: null, urlsTried: urls, count: players.length, error: players.length ? null : "No players in TheSportsDB payload." });
+      debug.push({
+        provider: "TheSportsDB",
+        url: null,
+        urlsTried: (urls || []).map(redactUrlSecrets),
+        count: players.length,
+        error: players.length ? null : "No players in TheSportsDB payload.",
+      });
     }
 
     // 4) RapidAPI fallback
     if (!players.length && !lockedToPrimary) {
       const rapid = await fetchRapidApiFieldPlayers(tournament);
-      debug.push({ provider: rapid.provider || "RapidAPI", url: rapid.url || null, urlsTried: rapid.urlsTried || [], count: rapid.players?.length || 0, error: rapid.error || null });
+      debug.push({
+        provider: rapid.provider || "RapidAPI",
+        url: rapid.url ? redactUrlSecrets(rapid.url) : null,
+        urlsTried: (rapid.urlsTried || []).map(redactUrlSecrets),
+        count: rapid.players?.length || 0,
+        error: rapid.error || null,
+      });
       if (rapid.players?.length) {
         players = rapid.players;
         source = rapid.provider || "RapidAPI";
