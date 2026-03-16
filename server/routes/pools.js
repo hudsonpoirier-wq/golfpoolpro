@@ -2,6 +2,7 @@
 
 const router = require("express").Router();
 const { requireAuth } = require("../middleware/auth");
+const draftRoutes = require("./draft");
 
 const MIN_PARTICIPANTS = 2;
 const MAX_PARTICIPANTS = 12;
@@ -202,6 +203,14 @@ router.post("/:id/start-draft", requireAuth, async (req, res, next) => {
       .select("id, host_id, status")
       .single();
     if (error) return res.status(400).json({ error: error.message });
+
+    // Ensure pick clock starts fresh; otherwise stale in-memory clocks can auto-skip immediately.
+    try {
+      if (typeof draftRoutes._resetDraftRuntime === "function") {
+        draftRoutes._resetDraftRuntime(id);
+      }
+    } catch {}
+
     res.json({ pool: updated });
   } catch (e) { next(e); }
 });
@@ -240,6 +249,12 @@ router.post("/:id/ready-all", requireAuth, async (req, res, next) => {
     const allReady = (members?.length || 0) >= 1 && members.every((m) => m.is_ready);
     if (allReady) {
       await sb.from("pools").update({ status: "draft" }).eq("id", id);
+      // Fresh clock on transition.
+      try {
+        if (typeof draftRoutes._resetDraftRuntime === "function") {
+          draftRoutes._resetDraftRuntime(id);
+        }
+      } catch {}
     }
 
     res.json({ allReady: !!allReady });

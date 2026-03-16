@@ -576,13 +576,14 @@ function normKey(v) {
 }
 
 function strongNameMatch(a, b) {
+  const stop = new Set(["the", "of", "and", "in", "at", "on", "for", "a", "an", "to", "by", "with", "presented"]);
   const aa = normKey(a);
   const bb = normKey(b);
   if (!aa || !bb) return false;
   if (aa.includes(bb) || bb.includes(aa)) return true;
 
-  const ta = aa.split(" ").filter(Boolean);
-  const tb = bb.split(" ").filter(Boolean);
+  const ta = aa.split(" ").filter((t) => t && !stop.has(t));
+  const tb = bb.split(" ").filter((t) => t && !stop.has(t));
   const small = ta.length <= tb.length ? ta : tb;
   const big = ta.length <= tb.length ? tb : ta;
   if (!small.length || !big.length) return false;
@@ -687,7 +688,10 @@ async function fetchDataGolfFieldPlayers(tournament) {
         .concat(Array.isArray(scheduleJson) ? scheduleJson : [])
         .filter((x) => x && typeof x === "object");
       const bestEvent = pickBestDataGolfEvent(scheduleItems, tournament);
-      scheduleEventId = bestEvent?.event_id ?? bestEvent?.eventId ?? bestEvent?.id ?? null;
+      const rawEventId = bestEvent?.event_id ?? bestEvent?.eventId ?? bestEvent?.id ?? null;
+      const rawStr = String(rawEventId || "").trim();
+      // DataGolf sometimes uses "TBD" placeholders. Never treat those as matchable event_ids.
+      scheduleEventId = rawStr && !/^tbd$/i.test(rawStr) ? rawEventId : null;
       scheduleEventName = scheduleEventName || bestEvent?.event_name || bestEvent?.name || null;
     } catch {}
   }
@@ -743,7 +747,7 @@ async function fetchDataGolfFieldPlayers(tournament) {
   };
   const pickBestPlayersFromFlatRows = (flatRows) => {
     const scheduleName = normKey(scheduleEventName || "");
-    const strictName = scheduleEventId ? (scheduleEventName || tournament?.name || "") : "";
+    const strictName = scheduleEventName || tournament?.name || "";
     const groups = new Map(); // key -> { event_id, event_name, start_date, rows }
     for (const row of flatRows || []) {
       if (!looksLikeFlatPlayerRow(row)) continue;
@@ -858,6 +862,18 @@ async function fetchDataGolfFieldPlayers(tournament) {
         if (flat.players?.length) {
           const players = await enrichPlayersFromDataGolfRefs(flat.players);
           return { players, provider: "DataGolf", url, urlsTried, event_id: flat.event_id || null };
+        }
+      }
+
+      // Nested flat rows: some feeds wrap player rows under a key (e.g., field_updates).
+      if (json && typeof json === "object" && !Array.isArray(json)) {
+        const nested = findBestPlayerArray(json);
+        if (Array.isArray(nested) && nested.length && looksLikeFlatPlayerRow(nested[0])) {
+          const flat = pickBestPlayersFromFlatRows(nested);
+          if (flat.players?.length) {
+            const players = await enrichPlayersFromDataGolfRefs(flat.players);
+            return { players, provider: "DataGolf", url, urlsTried, event_id: flat.event_id || null };
+          }
         }
       }
 

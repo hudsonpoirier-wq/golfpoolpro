@@ -8,6 +8,12 @@ const { requireAuth } = require("../middleware/auth");
 const pausedDraftPools = new Set(); // poolId -> paused boolean
 const draftClocks = new Map(); // poolId -> { pickNum, startedAtMs, pausedRemainingSec }
 
+function resetDraftRuntime(poolId) {
+  const key = String(poolId);
+  pausedDraftPools.delete(key);
+  draftClocks.delete(key);
+}
+
 function ensureDraftClock(poolId, pickNum, shotClock, lastPickAtMs) {
   const key = String(poolId);
   const existing = draftClocks.get(key);
@@ -368,5 +374,8 @@ async function autoSkip(sb, poolId, userId, pool, picks, draftOrder) {
 router._stats = () => ({
   pausedDraftPools: pausedDraftPools.size,
 });
+
+// Used by pool routes to ensure a fresh clock when transitioning lobby -> draft.
+router._resetDraftRuntime = resetDraftRuntime;
 
 module.exports = router;
