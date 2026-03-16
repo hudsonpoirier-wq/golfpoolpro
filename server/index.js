@@ -829,6 +829,38 @@ async function fetchBallDontLieFieldPlayers(tournament) {
 }
 
 async function importFieldPlayersIntoTournament(tournamentId, players) {
+  const canSafelyReplaceField = async () => {
+    try {
+      // Never replace if any pool has already drafted picks for this tournament.
+      const { data: poolsForTournament, error: poolsErr } = await supabase
+        .from("pools")
+        .select("id")
+        .eq("tournament_id", tournamentId);
+      if (poolsErr) return false;
+      const poolIds = (poolsForTournament || []).map((p) => p.id).filter(Boolean);
+      if (poolIds.length) {
+        const { count: pickCount, error: picksErr } = await supabase
+          .from("draft_picks")
+          .select("*", { count: "exact", head: true })
+          .in("pool_id", poolIds);
+        if (picksErr) return false;
+        if (Number(pickCount || 0) > 0) return false;
+      }
+
+      // Never replace if any non-shell score fields have been populated.
+      // Shell field imports keep these NULL.
+      const { count: realCount, error: realErr } = await supabase
+        .from("tournament_scores")
+        .select("*", { count: "exact", head: true })
+        .eq("tournament_id", tournamentId)
+        .or("position.not.is.null,r1.not.is.null,r2.not.is.null,r3.not.is.null,r4.not.is.null");
+      if (realErr) return false;
+      return Number(realCount || 0) === 0;
+    } catch {
+      return false;
+    }
+  };
+
   const uniqueByName = new Map();
   for (const p of players) {
     const name = normalizePlayerName(p.name || p.player || p.full_name);
@@ -859,6 +891,17 @@ async function importFieldPlayersIntoTournament(tournamentId, players) {
     .upsert(golferRows, { onConflict: "id" });
   if (golfersError) return { error: golfersError.message };
 
+  // If we previously imported a provisional/incorrect shell list, and nobody has drafted yet,
+  // replace the shell field so field size + draft list stay accurate.
+  if (await canSafelyReplaceField()) {
+    try {
+      await supabase
+        .from("tournament_scores")
+        .delete()
+        .eq("tournament_id", tournamentId);
+    } catch {}
+  }
+
   const scoreShellRows = golferRows.map((g) => ({
     tournament_id: tournamentId,
     golfer_id: g.id,
@@ -869,8 +912,20 @@ async function importFieldPlayersIntoTournament(tournamentId, players) {
     .upsert(scoreShellRows, { onConflict: "tournament_id,golfer_id", ignoreDuplicates: true });
   if (scoreShellError) return { error: scoreShellError.message };
 
+  // Keep tournaments.field_size aligned to what we actually have draftable.
+  try {
+    await supabase
+      .from("tournaments")
+      .update({ field_size: golferRows.length })
+      .eq("id", tournamentId);
+  } catch {}
+
   return { imported: golferRows.length };
 }
+
+// Expose helpers to routes (e.g., /api/golfers can auto-seed projected fields on-demand).
+app.locals.fetchDataGolfFieldPlayers = fetchDataGolfFieldPlayers;
+app.locals.importFieldPlayersIntoTournament = importFieldPlayersIntoTournament;
 
 async function tournamentHasField(tournamentId) {
   try {
@@ -898,11 +953,20 @@ async function autoSeedUpcomingFields() {
   if (error || !Array.isArray(upcoming) || !upcoming.length) return;
 
   for (const t of upcoming) {
-    // Skip if already has a field imported.
     // Also skip provider-specific ids that aren't ours (just in case).
     if (!t?.id || String(t.id).includes("::")) continue;
-    const has = await tournamentHasField(t.id);
-    if (has) continue;
+
+    // If real scoring has started, don't touch the field shell list.
+    let hasRealScores = false;
+    try {
+      const { count } = await supabase
+        .from("tournament_scores")
+        .select("*", { count: "exact", head: true })
+        .eq("tournament_id", t.id)
+        .or("position.not.is.null,r1.not.is.null,r2.not.is.null,r3.not.is.null,r4.not.is.null");
+      hasRealScores = Number(count || 0) > 0;
+    } catch {}
+    if (hasRealScores) continue;
 
     try {
       const dg = await fetchDataGolfFieldPlayers(t);

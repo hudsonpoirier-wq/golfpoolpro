@@ -2,6 +2,10 @@
 const router = require("express").Router();
 const { optionalAuth } = require("../middleware/auth");
 
+// Prevent repeated provider calls from hammering external APIs.
+const FIELD_SEED_ATTEMPTS = new Map(); // tournamentId -> { ts }
+const FIELD_SEED_MIN_INTERVAL_MS = Number(process.env.FIELD_SEED_MIN_INTERVAL_MS || 10 * 60 * 1000); // 10m
+
 // GET /api/golfers?tournament=t4
 router.get("/", optionalAuth, async (req, res, next) => {
   try {
@@ -14,10 +18,41 @@ router.get("/", optionalAuth, async (req, res, next) => {
         .from("tournament_scores")
         .select("golfer_id")
         .eq("tournament_id", tournament);
-      const ids = (scoredIds || []).map((s) => s.golfer_id).filter(Boolean);
+      let ids = (scoredIds || []).map((s) => s.golfer_id).filter(Boolean);
+
+      // If the tournament is upcoming, we may not have any score rows yet.
+      // Try to auto-seed a projected field once in a while using DataGolf (if configured).
       if (!ids.length) {
-        return res.json({ golfers: [] });
+        const now = Date.now();
+        const prev = FIELD_SEED_ATTEMPTS.get(String(tournament)) || null;
+        const shouldAttempt = !prev || (now - prev.ts) >= FIELD_SEED_MIN_INTERVAL_MS;
+        if (shouldAttempt) {
+          FIELD_SEED_ATTEMPTS.set(String(tournament), { ts: now });
+          try {
+            const { data: tRow } = await sb
+              .from("tournaments")
+              .select("id, name, start_date, field_size")
+              .eq("id", tournament)
+              .single();
+
+            const fetchDataGolfFieldPlayers = req.app.locals.fetchDataGolfFieldPlayers;
+            const importFieldPlayersIntoTournament = req.app.locals.importFieldPlayersIntoTournament;
+            if (tRow && typeof fetchDataGolfFieldPlayers === "function" && typeof importFieldPlayersIntoTournament === "function") {
+              const dg = await fetchDataGolfFieldPlayers(tRow);
+              if (dg?.players?.length) {
+                await importFieldPlayersIntoTournament(String(tournament), dg.players);
+                const { data: scoredIds2 } = await sb
+                  .from("tournament_scores")
+                  .select("golfer_id")
+                  .eq("tournament_id", tournament);
+                ids = (scoredIds2 || []).map((s) => s.golfer_id).filter(Boolean);
+              }
+            }
+          } catch {}
+        }
       }
+
+      if (!ids.length) return res.json({ golfers: [] });
       query = query.in("id", ids);
     }
     const { data, error } = await query;
