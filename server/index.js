@@ -582,14 +582,33 @@ function strongNameMatch(a, b) {
   if (!aa || !bb) return false;
   if (aa.includes(bb) || bb.includes(aa)) return true;
 
-  const ta = aa.split(" ").filter((t) => t && !stop.has(t));
-  const tb = bb.split(" ").filter((t) => t && !stop.has(t));
+  const normToken = (t) =>
+    String(t || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "")
+      // Common abbreviations/variants in feeds
+      .replace(/^championship$/, "champ")
+      .replace(/^tourn(?:ament)?$/, "tourney")
+      .replace(/^u(?:nited)?s(?:tates)?$/, "us");
+
+  const ta = aa.split(" ").map(normToken).filter((t) => t && !stop.has(t));
+  const tb = bb.split(" ").map(normToken).filter((t) => t && !stop.has(t));
   const small = ta.length <= tb.length ? ta : tb;
   const big = ta.length <= tb.length ? tb : ta;
   if (!small.length || !big.length) return false;
-  const bigSet = new Set(big);
-  const covered = small.filter((t) => bigSet.has(t)).length;
-  return covered >= Math.max(1, Math.ceil(small.length * 0.6));
+
+  const tokenMatches = (x, y) => {
+    if (!x || !y) return false;
+    if (x === y) return true;
+    const min = Math.min(x.length, y.length);
+    if (min >= 4 && (x.startsWith(y) || y.startsWith(x))) return true;
+    return false;
+  };
+
+  const covered = small.filter((t) => big.some((u) => tokenMatches(t, u))).length;
+  // Two-token names like "mast masters" vs "masters tournament" can be abbreviated; allow 50% coverage.
+  const threshold = small.length <= 2 ? 0.5 : 0.6;
+  return covered >= Math.max(1, Math.ceil(small.length * threshold));
 }
 
 function pickBestDataGolfEvent(scheduleItems, tournament) {
