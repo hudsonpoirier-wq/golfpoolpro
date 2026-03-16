@@ -433,6 +433,15 @@ async function fetchRapidApiFieldPlayers(tournament) {
       `${rapidBase}/event?eventId=${encodeURIComponent(vars.tsdb_event_id)}`
     );
   }
+  // SlashGolf "Live Golf Data" tends to expose plural endpoints like /tournaments and /leaderboards.
+  // We attempt a minimal schedule/tournaments fetch by year to get an internal event id, then try leaderboards/scorecards.
+  if (rapidBase && vars.year) {
+    urls.push(
+      `${rapidBase}/tournaments?orgId=1&year=${encodeURIComponent(vars.year)}`,
+      `${rapidBase}/tournaments?tourId=1&year=${encodeURIComponent(vars.year)}`,
+      `${rapidBase}/schedule?orgId=1&year=${encodeURIComponent(vars.year)}`
+    );
+  }
 
   const dedupedUrls = Array.from(new Set(urls.filter(Boolean)));
   const headers = {
@@ -472,6 +481,40 @@ async function fetchRapidApiFieldPlayers(tournament) {
         return { players, provider: "RapidAPI", url, urlsTried: dedupedUrls };
       }
     } catch {}
+  }
+
+  // If the API doesn't publish a tournament field until the event starts, use a provisional list
+  // so drafts can still run (will not be perfectly accurate).
+  if (rapidBase) {
+    const fallbackUrls = [
+      `${rapidBase}/worldranking`,
+      `${rapidBase}/worldrankings`,
+      `${rapidBase}/world-rankings`,
+      `${rapidBase}/players`,
+      `${rapidBase}/players?orgId=1`,
+    ];
+    for (const url of fallbackUrls) {
+      const cached = SLASHGOLF_CACHE.get(url);
+      if (cached && Date.now() - cached.ts < SLASHGOLF_CACHE_TTL_MS) {
+        const players = extractPlayersFromPayload(cached.json);
+        if (players.length) {
+          return { players, provider: "RapidAPI (ranking fallback)", url, urlsTried: [...dedupedUrls, ...fallbackUrls] };
+        }
+      }
+      const decision = slashgolfCanCall();
+      if (!decision.ok) break;
+      try {
+        slashgolfRegisterCall();
+        const resp = await fetch(url, { headers, timeout: 12000 });
+        if (!resp.ok) continue;
+        const json = await resp.json();
+        SLASHGOLF_CACHE.set(url, { ts: Date.now(), json });
+        const players = extractPlayersFromPayload(json);
+        if (players.length) {
+          return { players, provider: "RapidAPI (ranking fallback)", url, urlsTried: [...dedupedUrls, ...fallbackUrls] };
+        }
+      } catch {}
+    }
   }
 
   return { players: [], provider: "RapidAPI", urlsTried: dedupedUrls };
@@ -729,7 +772,7 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
       const rapid = await fetchRapidApiFieldPlayers(tournament);
       if (rapid.players?.length) {
         players = rapid.players;
-        source = "RapidAPI";
+        source = rapid.provider || "RapidAPI";
       }
     }
 
