@@ -1177,9 +1177,27 @@ export default function GolfPoolPro() {
           hostId: resp?.pool?.host_id || pool.hostId,
         }) : pool);
         const nextStatus = resp?.pool?.status || activePool.status;
-        if (nextStatus === "draft") setPoolPhase("draft");
-        else if (nextStatus === "live" || nextStatus === "complete") setPoolPhase("live");
-        else setPoolPhase("lobby");
+        if (nextStatus === "draft") {
+          setPoolPhase("draft");
+          // In shared mode, "draftActive" must follow the server's status; don't rely on local startDraft().
+          setDraftActive(true);
+          // Pool status should flip to "live" when complete, but keep this safe if status lags.
+          const ts = Number(resp?.pool?.team_size || activePool?.teamSize || 0);
+          const total = (members.length || 0) * (ts || 0);
+          if (total > 0 && picks.length >= total) {
+            setDraftDone(true);
+          } else {
+            setDraftDone(false);
+          }
+        } else if (nextStatus === "live" || nextStatus === "complete") {
+          setPoolPhase("live");
+          setDraftActive(false);
+          setDraftDone(false);
+        } else {
+          setPoolPhase("lobby");
+          setDraftActive(false);
+          setDraftDone(false);
+        }
       } catch {}
     };
     syncPool();
@@ -1299,8 +1317,11 @@ export default function GolfPoolPro() {
   const isHostOfActivePool = String(activePool?.hostId || activePool?.host_id || "") === String(effectiveUserId || "");
   const joinedParticipants = (() => {
     if (!activePool) return participants.filter(p=>p.joined);
-    const members = participants.filter(p=>activePoolMemberIds.some((id)=>String(id)===String(p.id)));
-    if (members.length) return members;
+    // Preserve backend join order so snake draft turn-taking matches the server.
+    const ordered = activePoolMemberIds
+      .map((id) => participants.find((p) => String(p.id) === String(id)))
+      .filter(Boolean);
+    if (ordered.length) return ordered;
     const fallbackUserId = apiSession.get()?.id || currentUser;
     if (!fallbackUserId) return [];
     const me = participants.find((p)=>String(p.id)===String(fallbackUserId));
@@ -1319,6 +1340,9 @@ export default function GolfPoolPro() {
   // Build base participant order (randomized if pool uses random order)
   const baseParticipantOrder = (() => {
     const joined = joinedParticipants;
+    // For shared drafts, the server turn order is based on join time.
+    // Ignore client-only randomized order to prevent mismatched turn UI.
+    if (apiToken.get() && activePool?.id) return joined;
     if(draftOrderType === "random" && randomizedOrder.length === joined.length) {
       // Use stored random order so it stays consistent across renders
       return randomizedOrder.map(i => joined[i]).filter(Boolean);
@@ -1343,6 +1367,8 @@ export default function GolfPoolPro() {
 
   useEffect(()=>{
     if(!draftActive||draftDone) return;
+    // Shared drafts use server-side timers + auto-skip. Prevent client-side auto-picks.
+    if (apiToken.get() && activePool?.id) return;
     const sc = activePool?.shotClock||config.shotClock;
     setTimer(sc);
     timerRef.current = setInterval(()=>{
@@ -1431,6 +1457,25 @@ export default function GolfPoolPro() {
   };
 
   const startDraft = () => {
+    // Shared mode: start draft via server so all clients stay in sync.
+    if (apiToken.get() && activePool?.id) {
+      if (!isHostOfActivePool) {
+        notify("Only the host can start the draft.", "error");
+        return;
+      }
+      (async () => {
+        try {
+          await Pools.startDraft(activePool.id);
+          setPoolPhase("draft");
+          setDraftActive(true);
+          setDraftDone(false);
+          setServerTimeRemaining(null);
+        } catch (e) {
+          notify(e?.message || "Could not start the draft. Make sure everyone is ready.", "error");
+        }
+      })();
+      return;
+    }
     if (poolTournamentField.length === 0) {
       notify("No real tournament field is loaded yet. Seed golfer data first.", "error");
       return;
@@ -1964,11 +2009,15 @@ export default function GolfPoolPro() {
 
   // Auto-launch when all ready
   useEffect(()=>{
-    if(allReady && poolPhase==="lobby" && view==="pool"){
+    // Only the host should trigger a shared draft start; other clients will transition
+    // when the backend pool status flips to "draft".
+    if(allReady && poolPhase==="lobby" && view==="pool" && isHostOfActivePool){
+      // Shared drafts require at least 2 members on the server.
+      if (apiToken.get() && joinedParticipants.length < 2) return;
       const t = setTimeout(()=>{ startDraft(); }, 1500);
       return ()=>clearTimeout(t);
     }
-  },[allReady]);
+  },[allReady, poolPhase, view, isHostOfActivePool, joinedParticipants.length]);
 
   /* ─── RENDER ─── */
   return (
@@ -2527,21 +2576,25 @@ export default function GolfPoolPro() {
             )}
 
             {/* ── DRAFT PHASE ── */}
-            {poolPhase==="draft" && (
-              <div className="page-wide">
-                {!draftActive && !draftDone && (
-                  <div style={{textAlign:"center",padding:"80px 40px"}}>
-                    <p style={{fontSize:56,marginBottom:16}}>🏌️</p>
-                    <h2 className="h2" style={{marginBottom:10}}>Ready to Draft</h2>
-                    <p className="sub" style={{marginBottom:28}}>{poolTournamentField.length} golfers available · Best {activePool.scoringGolfers} of {activePool.teamSize} count</p>
-                    {poolTournamentField.length===0 && (
-                      <p style={{fontSize:13,color:"var(--red)",marginBottom:14}}>
-                        No live field is loaded for this tournament yet.
-                      </p>
+                {poolPhase==="draft" && (
+                  <div className="page-wide">
+                    {!draftActive && !draftDone && (
+                      <div style={{textAlign:"center",padding:"80px 40px"}}>
+                        <p style={{fontSize:56,marginBottom:16}}>🏌️</p>
+                        <h2 className="h2" style={{marginBottom:10}}>Ready to Draft</h2>
+                        <p className="sub" style={{marginBottom:28}}>{poolTournamentField.length} golfers available · Best {activePool.scoringGolfers} of {activePool.teamSize} count</p>
+                        {poolTournamentField.length===0 && (
+                          <p style={{fontSize:13,color:"var(--red)",marginBottom:14}}>
+                            No live field is loaded for this tournament yet.
+                          </p>
+                        )}
+                        {(!apiToken.get() || isHostOfActivePool) ? (
+                          <button className="btn btn-gold" style={{fontSize:16,padding:"14px 32px"}} onClick={startDraft} disabled={poolTournamentField.length===0}>Start Draft →</button>
+                        ) : (
+                          <p className="sub" style={{marginTop:12}}>Waiting for host to start the draft…</p>
+                        )}
+                      </div>
                     )}
-                    <button className="btn btn-gold" style={{fontSize:16,padding:"14px 32px"}} onClick={startDraft} disabled={poolTournamentField.length===0}>Start Draft →</button>
-                  </div>
-                )}
                 {draftDone && (
                   <div style={{textAlign:"center",padding:"60px 40px"}}>
                     <p style={{fontSize:56,marginBottom:14}}>🎉</p>

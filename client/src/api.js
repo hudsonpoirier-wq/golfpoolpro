@@ -203,6 +203,9 @@ export const Pools = {
 
   /** Host-only: remove a member (lobby only) */
   removeMember: (poolId, userId) => del(`/api/pools/${poolId}/members/${encodeURIComponent(userId)}`),
+
+  /** Host-only: start the draft (server becomes source of truth for draft state) */
+  startDraft: (poolId) => post(`/api/pools/${poolId}/start-draft`, {}),
 };
 
 

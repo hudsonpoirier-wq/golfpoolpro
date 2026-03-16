@@ -132,7 +132,9 @@ router.get("/:id", requireAuth, async (req, res, next) => {
     const { data: members } = await sb
       .from("pool_members")
       .select("user_id, is_ready, joined_at, profile:profiles(id, name, avatar, email)")
-      .eq("pool_id", id);
+      .eq("pool_id", id)
+      // Draft order is based on join time; keep API ordering consistent.
+      .order("joined_at");
 
     // Draft picks
     const { data: picks } = await sb
@@ -149,6 +151,57 @@ router.get("/:id", requireAuth, async (req, res, next) => {
       .order("score", { ascending: true });
 
     res.json({ pool, members, picks, standings, activeLobbyUserIds: pruneLobby(id) });
+  } catch (e) { next(e); }
+});
+
+// ─── POST /api/pools/:id/start-draft ──────────────────────────
+// Host-only: flips pool status from lobby -> draft once everyone is ready.
+// This makes the backend the source of truth so clients don't "bounce" when polling.
+router.post("/:id/start-draft", requireAuth, async (req, res, next) => {
+  try {
+    const sb = req.app.locals.supabase;
+    const { id } = req.params;
+
+    const { data: pool } = await sb
+      .from("pools")
+      .select("id, host_id, status")
+      .eq("id", id)
+      .single();
+    if (!pool) return res.status(404).json({ error: "Pool not found." });
+    if (String(pool.host_id) !== String(req.user.id)) {
+      return res.status(403).json({ error: "Only the host can start the draft." });
+    }
+
+    // Idempotent: if already started, just return the current pool.
+    if (pool.status === "draft") return res.json({ pool });
+    if (pool.status !== "lobby") return res.status(409).json({ error: "Draft can only be started from the lobby." });
+
+    const { data: members } = await sb
+      .from("pool_members")
+      .select("is_ready")
+      .eq("pool_id", id);
+    const memberCount = members?.length || 0;
+    if (memberCount < 2) return res.status(409).json({ error: "Need at least 2 participants to start the draft." });
+    const allReady = members.every((m) => m.is_ready);
+    if (!allReady) return res.status(409).json({ error: "All participants must be ready to start the draft." });
+
+    const { data: picks } = await sb
+      .from("draft_picks")
+      .select("pick_number")
+      .eq("pool_id", id)
+      .limit(1);
+    if ((picks?.length || 0) > 0) {
+      return res.status(409).json({ error: "Draft has already started for this pool." });
+    }
+
+    const { data: updated, error } = await sb
+      .from("pools")
+      .update({ status: "draft" })
+      .eq("id", id)
+      .select("id, host_id, status")
+      .single();
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ pool: updated });
   } catch (e) { next(e); }
 });
 
