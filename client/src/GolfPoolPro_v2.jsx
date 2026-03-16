@@ -3847,55 +3847,8 @@ export default function GolfPoolPro() {
                 </div>
               )}
 
-              {authMode==="join" && invitePool && (
-                <div>
-                  <h3 className="h3" style={{marginBottom:8}}>Review Pool Details</h3>
-                  <p className="sub" style={{fontSize:13,marginBottom:14}}>
-                    You are signed in. Click Join Pool to enter this pool and add it to your account.
-                  </p>
-                  <div style={{background:"var(--cream)",border:"1px solid var(--cream-2)",borderRadius:12,padding:"14px 16px",marginBottom:14}}>
-                    <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--cream-2)"}}>
-                      <span style={{fontSize:12,color:"var(--muted)",fontWeight:700,letterSpacing:".3px"}}>POOL</span>
-                      <span style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{invitePool.name}</span>
-                    </div>
-                    <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--cream-2)"}}>
-                      <span style={{fontSize:12,color:"var(--muted)",fontWeight:700,letterSpacing:".3px"}}>TOURNAMENT</span>
-                      <span style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>
-                        {invitePool.tournamentName || tournaments.find(t=>t.id===invitePool.tournamentId)?.name || "TBD"}
-                      </span>
-                    </div>
-                    <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--cream-2)"}}>
-                      <span style={{fontSize:12,color:"var(--muted)",fontWeight:700,letterSpacing:".3px"}}>SPOTS</span>
-                      <span style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>
-                        {Number(invitePool.participants || 0)}/{Number(invitePool.maxParticipants || 8)}
-                      </span>
-                    </div>
-                    <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--cream-2)"}}>
-                      <span style={{fontSize:12,color:"var(--muted)",fontWeight:700,letterSpacing:".3px"}}>TEAM SIZE</span>
-                      <span style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{invitePool.teamSize || 4} golfers</span>
-                    </div>
-                    <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0"}}>
-                      <span style={{fontSize:12,color:"var(--muted)",fontWeight:700,letterSpacing:".3px"}}>STATUS</span>
-                      <span style={{fontSize:13,fontWeight:700,color:"var(--text)",textTransform:"capitalize"}}>{invitePool.status || "lobby"}</span>
-                    </div>
-                  </div>
-                  {authError && <p style={{color:"var(--red)",fontSize:13,marginBottom:12,fontWeight:600}}>{authError}</p>}
-                  <button
-                    type="button"
-                    className="btn btn-prim"
-                    style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px",marginBottom:10}}
-                    onClick={handleJoinInvitedPool}
-                    disabled={authBusy}
-                  >
-                    {authBusy ? "Joining..." : "Join Pool"}
-                  </button>
-                  <div style={{textAlign:"center"}}>
-                    <button type="button" className="btn-link" onClick={()=>{setAuthMode("login");setAuthPass("");setAuthError("");setAuthSuccess("");}}>
-                      Use a different account
-                    </button>
-                  </div>
-                </div>
-              )}
+              {/* Note: There is intentionally only ONE Join Pool button on this page (above).
+                  Logged-out users authenticate, then we auto-join and route into the lobby. */}
 
               {authMode!=="forgot" && authMode!=="join" && authSuccess && (
                 <p style={{color:"var(--green)",fontSize:13,marginTop:14,fontWeight:700,textAlign:"center"}}>{authSuccess}</p>
