@@ -1206,6 +1206,7 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
     let source = "unknown";
     let importedEventId = null;
     const debug = [];
+    let lockedToPrimary = false;
 
     // 0) DataGolf first (best for upcoming fields)
     if (!players.length) {
@@ -1214,11 +1215,13 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
       if (dg.players?.length) {
         players = dg.players;
         source = "DataGolf";
+        // Do not merge in other providers after DataGolf; it makes fields inaccurate.
+        lockedToPrimary = true;
       }
     }
 
     // 1) Sportradar first (if configured)
-    if (!players.length) {
+    if (!players.length && !lockedToPrimary) {
       const sr = await fetchSportradarFieldPlayers(tournament);
       debug.push({ provider: "Sportradar", url: sr.url || null, urlsTried: sr.urlsTried || [], count: sr.players?.length || 0, error: sr.error || null });
       if (sr.players?.length) {
@@ -1228,7 +1231,7 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
     }
 
     // 2) BallDontLie PGA
-    if (!players.length) {
+    if (!players.length && !lockedToPrimary) {
       const bdl = await fetchBallDontLieFieldPlayers(tournament);
       debug.push({ provider: "BallDontLie", url: bdl.url || null, urlsTried: bdl.urlsTried || [], count: bdl.players?.length || 0, error: bdl.error || null });
       if (bdl.players?.length) {
@@ -1238,7 +1241,7 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
     }
 
     // 3) TheSportsDB
-    if (eventId) {
+    if (eventId && !lockedToPrimary) {
       const tsdbKey = process.env.THE_SPORTS_DB_KEY || "3";
       const base = `https://www.thesportsdb.com/api/v1/json/${tsdbKey}`;
       const urls = [
@@ -1263,7 +1266,7 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
     }
 
     // 4) RapidAPI fallback
-    if (!players.length) {
+    if (!players.length && !lockedToPrimary) {
       const rapid = await fetchRapidApiFieldPlayers(tournament);
       debug.push({ provider: rapid.provider || "RapidAPI", url: rapid.url || null, urlsTried: rapid.urlsTried || [], count: rapid.players?.length || 0, error: rapid.error || null });
       if (rapid.players?.length) {

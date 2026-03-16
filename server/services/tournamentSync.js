@@ -350,10 +350,13 @@ async function seedUpcomingTournaments(supabase, year = new Date().getUTCFullYea
   const theSportsDbRows = [];
   const ballDontLieRows = [];
   for (const y of years) {
-    dataGolfRows.push(...(await fetchDataGolfTournaments(y, today)));
-    sportsDataRows.push(...(await fetchSportsDataTournaments(y, today)));
-    theSportsDbRows.push(...(await fetchTheSportsDbTournaments(y, today)));
-    ballDontLieRows.push(...(await fetchBallDontLieTournaments(y, today)));
+    if (DATAGOLF_API_KEY) {
+      dataGolfRows.push(...(await fetchDataGolfTournaments(y, today)));
+    } else {
+      sportsDataRows.push(...(await fetchSportsDataTournaments(y, today)));
+      theSportsDbRows.push(...(await fetchTheSportsDbTournaments(y, today)));
+      ballDontLieRows.push(...(await fetchBallDontLieTournaments(y, today)));
+    }
   }
   const templateRows = normalizeTemplate(year, today);
 
@@ -385,8 +388,8 @@ async function seedUpcomingTournaments(supabase, year = new Date().getUTCFullYea
     .from("tournaments")
     .upsert(dedupedRows, { onConflict: "id" });
 
-  if (error) return { error: error.message, source: best.provider, counts };
-  return { seeded: dedupedRows.length, source: best.provider, counts };
+  if (error) return { error: error.message, source: DATAGOLF_API_KEY ? "DATAGOLF" : best.provider, counts };
+  return { seeded: dedupedRows.length, source: DATAGOLF_API_KEY ? "DATAGOLF" : best.provider, counts };
 }
 
 module.exports = { seedUpcomingTournaments };
