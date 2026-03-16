@@ -49,6 +49,9 @@ const supabase = createClient(
 app.locals.supabase = supabase;
 app.locals.analytics = analytics;
 
+// Safety switch: avoid seeding fake "ranking fallback" fields unless explicitly enabled.
+const ALLOW_PROVISIONAL_FIELDS = String(process.env.ALLOW_PROVISIONAL_FIELDS || "").toLowerCase() === "true";
+
 // ─── Middleware ───────────────────────────────────────────────
 app.use(helmet());
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
@@ -559,6 +562,68 @@ async function fetchDataGolfFieldPlayers(tournament) {
   const getEventName = (ev) => normKey(ev?.event_name || ev?.eventName || ev?.name || ev?.tournament_name || ev?.tournament || "");
   const getEventDate = (ev) => ev?.start_date || ev?.startDate || ev?.event_start_date || ev?.date || ev?.start || "";
 
+  // DataGolf's `field-updates` endpoint sometimes returns a flat list of rows (one per player)
+  // with `event_id`/`event_name` repeated per row. In that case we need to group rows by event.
+  const getRowEventId = (r) => r?.event_id ?? r?.eventId ?? r?.tournament_id ?? r?.tournamentId ?? r?.id ?? null;
+  const getRowEventName = (r) => r?.event_name || r?.eventName || r?.event || r?.tournament_name || r?.tournament || r?.name || "";
+  const getRowEventDate = (r) => r?.start_date || r?.startDate || r?.event_start_date || r?.date || r?.start || r?.starts_at || "";
+  const looksLikeFlatPlayerRow = (r) => {
+    if (!r || typeof r !== "object") return false;
+    const hasPlayer = !!(r.player_name || r.full_name || r.player || r.name);
+    const hasEvent = !!(r.event_name || r.eventName || r.event_id || r.eventId || r.tournament_id || r.tournamentId);
+    return hasPlayer && hasEvent;
+  };
+  const pickBestPlayersFromFlatRows = (flatRows) => {
+    const groups = new Map(); // key -> { event_id, event_name, start_date, rows }
+    for (const row of flatRows || []) {
+      if (!looksLikeFlatPlayerRow(row)) continue;
+      const eid = getRowEventId(row);
+      const ename = getRowEventName(row);
+      const key = (eid != null && String(eid).trim())
+        ? `id:${String(eid).trim()}`
+        : (ename ? `name:${normKey(ename)}` : null);
+      if (!key) continue;
+      const g = groups.get(key) || { event_id: eid != null ? String(eid).trim() : null, event_name: ename || "", start_date: null, rows: [] };
+      g.rows.push(row);
+      if (!g.event_name && ename) g.event_name = ename;
+      if (!g.start_date) {
+        const d = getRowEventDate(row);
+        if (d) g.start_date = d;
+      }
+      groups.set(key, g);
+    }
+
+    // Best: match by event_id from the schedule, when possible.
+    if (scheduleEventId) {
+      const direct = groups.get(`id:${String(scheduleEventId).trim()}`) || null;
+      if (direct) {
+        const players = coercePlayers(direct.rows);
+        if (players.length) return { players, event_id: direct.event_id };
+      }
+    }
+
+    // Fallback: choose the closest event name/date match with a realistic field size.
+    let bestPlayers = [];
+    let bestScore = Number.POSITIVE_INFINITY;
+    let bestEventId = null;
+    for (const g of groups.values()) {
+      const evName = normKey(g.event_name || "");
+      if (!evName) continue;
+      const namePenalty = (evName.includes(targetName) || targetName.includes(evName)) ? 0 : 40;
+      const datePenalty = dateDistanceDays(targetDate, g.start_date);
+      const players = coercePlayers(g.rows);
+      if (!players.length) continue;
+      const sizePenalty = players.length < 50 ? 25 : 0;
+      const score = namePenalty + datePenalty + sizePenalty;
+      if (score < bestScore) {
+        bestScore = score;
+        bestPlayers = players;
+        bestEventId = g.event_id || null;
+      }
+    }
+    return { players: bestPlayers, event_id: bestEventId };
+  };
+
   const pickBestEventFromPayload = (json) => {
     const candidates = [];
     if (Array.isArray(json)) candidates.push(...json);
@@ -606,6 +671,14 @@ async function fetchDataGolfFieldPlayers(tournament) {
     urlsTried.push(url);
     try {
       const json = await datagolfFetchJson(url);
+
+      // Flat rows form: group by event first.
+      if (Array.isArray(json) && json.length && looksLikeFlatPlayerRow(json[0])) {
+        const flat = pickBestPlayersFromFlatRows(json);
+        if (flat.players?.length) {
+          return { players: flat.players, provider: "DataGolf", url, urlsTried, event_id: flat.event_id || null };
+        }
+      }
 
       // First: exact match by schedule event_id (most reliable).
       if (scheduleEventId && json && typeof json === "object") {
@@ -762,9 +835,9 @@ async function fetchRapidApiFieldPlayers(tournament) {
     } catch {}
   }
 
-  // If the API doesn't publish a tournament field until the event starts, use a provisional list
-  // so drafts can still run (will not be perfectly accurate).
-  if (rapidBase) {
+  // If the API doesn't publish a tournament field until the event starts, a ranking-based
+  // provisional list can keep drafts unblocked. Default is OFF (accuracy first).
+  if (rapidBase && ALLOW_PROVISIONAL_FIELDS) {
     const fallbackUrls = [
       `${rapidBase}/worldranking`,
       `${rapidBase}/worldrankings`,
@@ -891,7 +964,18 @@ async function fetchBallDontLieFieldPlayers(tournament) {
     } catch {}
   }
 
-  // Free tier fallback: no tournament field endpoint available, seed a ranked player pool.
+  // If BallDontLie doesn't publish the tournament field yet, do NOT seed a fake ranking-based field
+  // unless explicitly allowed. Accuracy matters for drafts.
+  if (!ALLOW_PROVISIONAL_FIELDS) {
+    return {
+      players: [],
+      provider: "BallDontLie",
+      urlsTried: tournamentUrls,
+      error: "BallDontLie did not return a tournament field (provisional ranking fallback disabled).",
+    };
+  }
+
+  // Optional fallback: seed a ranked player pool.
   const fallbackUrls = [
     `${baseUrl}/players?per_page=200`,
     `${baseUrl}/players?sort=owgr&per_page=200`,
@@ -1191,7 +1275,7 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
     players = players.filter((p) => p.name);
     if (!players.length) {
       return res.status(404).json({
-        error: "No player list found from BallDontLie, Sportradar, TheSportsDB, or RapidAPI for this tournament yet.",
+        error: "No player list found from DataGolf, Sportradar, BallDontLie, TheSportsDB, or RapidAPI for this tournament yet.",
         debug,
       });
     }

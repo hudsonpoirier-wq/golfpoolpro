@@ -2770,7 +2770,7 @@ export default function GolfPoolPro() {
                       </div>
                       {draftActive&&!draftDone&&(
                         <div className="clock-wrap">
-                          <ShotClock total={activePool?.shotClock||config.shotClock} time={apiToken.get() ? (serverTimeRemaining ?? timer) : timer}/>
+                          <ShotClock total={activePool?.shotClock||config.shotClock} time={timer}/>
                           <p style={{fontSize:12,color:"rgba(255,255,255,.65)"}}>On the Clock</p>
                           <p style={{fontFamily:"'Cormorant Garamond',serif",fontSize:16,fontWeight:600,color:"var(--gold-light)",textAlign:"center"}}>{currentParticipant?.name}</p>
                           {apiToken.get() && isHostOfActivePool && (

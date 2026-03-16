@@ -1,8 +1,10 @@
 const fetch = require("node-fetch");
+const crypto = require("crypto");
 
 // Prefer DataGolf for schedules/fields when configured.
 const DATAGOLF_API_KEY = process.env.DATAGOLF_API_KEY || "";
 const DATAGOLF_BASE_URL = (process.env.DATAGOLF_BASE_URL || "https://feeds.datagolf.com").replace(/\/+$/, "");
+const DATAGOLF_SCHEDULE_TOUR = String(process.env.DATAGOLF_SCHEDULE_TOUR || process.env.DATAGOLF_TOUR || "pga").toLowerCase();
 
 // Fallback providers (kept as a backup if DataGolf is unavailable).
 const SPORTS_DATA_KEY = process.env.SPORTS_DATA_IO_KEY;
@@ -186,25 +188,29 @@ async function fetchBallDontLieTournaments(year, today) {
 
 async function fetchDataGolfTournaments(season, today) {
   if (!DATAGOLF_API_KEY) return [];
-  const url = `${DATAGOLF_BASE_URL}/get-schedule?tour=all&season=${encodeURIComponent(String(season))}&upcoming_only=no&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
+  const url = `${DATAGOLF_BASE_URL}/get-schedule?tour=${encodeURIComponent(DATAGOLF_SCHEDULE_TOUR)}&season=${encodeURIComponent(String(season))}&upcoming_only=no&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
   try {
     const resp = await fetch(url, { timeout: 12000 });
     if (!resp.ok) return [];
     const json = await resp.json();
-    const items = []
-      .concat(json?.schedule || [])
-      .concat(json?.events || [])
-      .concat(json?.data || [])
-      .concat(Array.isArray(json) ? json : [])
-      .filter((x) => x && typeof x === "object");
+    // Avoid concatenating multiple arrays from the same payload because it can introduce
+    // duplicates (which breaks Postgres ON CONFLICT upserts).
+    const itemsRaw =
+      (Array.isArray(json?.schedule) && json.schedule) ||
+      (Array.isArray(json?.events) && json.events) ||
+      (Array.isArray(json?.tournaments) && json.tournaments) ||
+      (Array.isArray(json?.data) && json.data) ||
+      (Array.isArray(json) ? json : []);
+    const items = (itemsRaw || []).filter((x) => x && typeof x === "object");
 
     const rows = items
       .map((t) => {
-        const externalId = t.event_id || t.eventId || t.id || t.tournament_id || t.tournamentId;
         const start = asDateOnly(t.start_date || t.startDate || t.date || t.starts_at);
-        if (!externalId || !start || start < today) return null;
+        if (!start || start < today) return null;
         const end = asDateOnly(t.end_date || t.endDate || t.ends_at) || plusDays(start, 3);
-        const name = t.event_name || t.name || t.tournament || t.event || `Tournament ${externalId}`;
+        const name = t.event_name || t.name || t.tournament || t.event || null;
+        if (!name) return null;
+        const externalId = t.event_id || t.eventId || t.id || t.tournament_id || t.tournamentId;
         const venue =
           t.course_name ||
           t.course ||
@@ -215,7 +221,7 @@ async function fetchDataGolfTournaments(season, today) {
         const purse = t.purse || t.purse_usd || t.total_purse || null;
         const fieldSize = Number(t.field_size || t.fieldSize || 0) || null;
         return {
-          id: `dg_${externalId}`,
+          id: stableDataGolfRowId({ season, externalId, name, startDate: start }),
           name,
           venue,
           start_date: start,
@@ -227,7 +233,14 @@ async function fetchDataGolfTournaments(season, today) {
       })
       .filter(Boolean);
 
-    return rows;
+    // Dedupe by ID to prevent:
+    // "ON CONFLICT DO UPDATE command cannot affect row a second time"
+    const byId = new Map();
+    for (const r of rows) {
+      const prev = byId.get(r.id);
+      byId.set(r.id, prev ? pickMoreCompleteRow(prev, r) : r);
+    }
+    return Array.from(byId.values());
   } catch {
     return [];
   }
@@ -255,6 +268,42 @@ function dateDistanceDays(a, b) {
   const db = new Date(b);
   if (Number.isNaN(da.getTime()) || Number.isNaN(db.getTime())) return 3650;
   return Math.abs(Math.round((da.getTime() - db.getTime()) / 86400000));
+}
+
+function stableDataGolfRowId({ season, externalId, name, startDate }) {
+  const raw = String(externalId || "").trim();
+  // DataGolf sometimes uses "TBD" for event_id on some tours/future weeks.
+  // Never use a non-unique ID in DB rows because Supabase upserts will fail.
+  const validExternal = raw && !/^tbd$/i.test(raw);
+  if (validExternal) return `dg_${raw}`;
+
+  const base = `${String(season || "")}|${normKey(name)}|${String(startDate || "")}`;
+  const hash = crypto.createHash("sha1").update(base).digest("hex").slice(0, 12);
+  return `dg_${String(season || "s")}_${hash}`;
+}
+
+function pickMoreCompleteRow(a, b) {
+  const score = (r) => {
+    if (!r) return 0;
+    return [
+      r.name,
+      r.venue,
+      r.start_date,
+      r.end_date,
+      r.purse,
+      r.field_size,
+      r.status,
+    ].reduce((acc, v) => acc + (v == null || v === "" ? 0 : 1), 0);
+  };
+
+  const sa = score(a);
+  const sb = score(b);
+  if (sb !== sa) return sb > sa ? b : a;
+  // Deterministic tie-break: earlier date wins.
+  const ad = String(a?.start_date || "");
+  const bd = String(b?.start_date || "");
+  if (bd && ad && bd !== ad) return bd < ad ? b : a;
+  return a;
 }
 
 function overlayTemplateFromDataGolf(templateRows, dataGolfRows) {
@@ -292,7 +341,9 @@ function overlayTemplateFromDataGolf(templateRows, dataGolfRows) {
 
 async function seedUpcomingTournaments(supabase, year = new Date().getUTCFullYear()) {
   const today = new Date().toISOString().slice(0, 10);
-  const years = [year, year + 1];
+  // Seed the requested season only. Including year+1 can create duplicate IDs on some
+  // external providers and also pollutes the "future" list with next-season events.
+  const years = [year];
 
   const dataGolfRows = [];
   const sportsDataRows = [];
@@ -323,12 +374,19 @@ async function seedUpcomingTournaments(supabase, year = new Date().getUTCFullYea
     : (best.count ? best.rows : templateRows);
   if (!rows.length) return { seeded: 0, source: "NONE", counts };
 
+  const byId = new Map();
+  for (const r of rows) {
+    const prev = byId.get(r.id);
+    byId.set(r.id, prev ? pickMoreCompleteRow(prev, r) : r);
+  }
+  const dedupedRows = Array.from(byId.values());
+
   const { error } = await supabase
     .from("tournaments")
-    .upsert(rows, { onConflict: "id" });
+    .upsert(dedupedRows, { onConflict: "id" });
 
   if (error) return { error: error.message, source: best.provider, counts };
-  return { seeded: rows.length, source: best.provider, counts };
+  return { seeded: dedupedRows.length, source: best.provider, counts };
 }
 
 module.exports = { seedUpcomingTournaments };
