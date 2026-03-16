@@ -709,6 +709,7 @@ export default function GolfPoolPro() {
   const [chatBusy,setChatBusy] = useState(false);
   const [draftPaused,setDraftPaused] = useState(false);
   const [serverTimeRemaining,setServerTimeRemaining] = useState(null);
+  const lastServerPickNumRef = useRef(null);
   const [resetPass,setResetPass] = useState("");
   const [resetPassConfirm,setResetPassConfirm] = useState("");
   const loginEmailRef = useRef(null);
@@ -1294,15 +1295,24 @@ export default function GolfPoolPro() {
         if (stopped) return;
         setDraftPaused(!!state?.paused);
         if (typeof state?.timeRemaining === "number") {
-          setServerTimeRemaining(state.timeRemaining);
-          // Keep a smooth UI countdown between polls without constantly resetting the UI to 60.
-          // Only snap when server indicates a new turn/reset or a large drift.
+          const srv = state.timeRemaining;
+          setServerTimeRemaining(srv);
+
+          const srvPickNumRaw = Number(state?.pickNumber);
+          const srvPickNum = Number.isFinite(srvPickNumRaw)
+            ? srvPickNumRaw
+            : (Array.isArray(state?.picks) ? state.picks.length : null);
+          const prevPickNum = lastServerPickNumRef.current;
+          const isNewPick = typeof srvPickNum === "number" && srvPickNum !== prevPickNum;
+          if (typeof srvPickNum === "number") lastServerPickNumRef.current = srvPickNum;
+
+          // Keep a smooth UI countdown between polls:
+          // - Snap on a new pick (pick number changes)
+          // - Otherwise only snap downward when server indicates less time remaining
+          //   (don't snap upward on server restarts/load balancing; it causes a stuck-at-60 timer).
           setTimer((prev) => {
-            const srv = state.timeRemaining;
             if (typeof prev !== "number") return srv;
-            // If server time increases, it's a new pick/reset: snap to server.
-            if (srv > prev) return srv;
-            // If we're off by more than ~2s, snap back.
+            if (isNewPick) return srv;
             if ((prev - srv) > 2) return srv;
             return prev;
           });
