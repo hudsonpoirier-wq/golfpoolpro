@@ -8,6 +8,8 @@ const SPORTS_DATA_KEY = process.env.SPORTS_DATA_IO_KEY;
 const SPORTS_DATA_BASE = "https://api.sportsdata.io/golf/v2/json";
 const BALLDONTLIE_PGA_KEY = process.env.BALLDONTLIE_PGA_KEY || process.env.BALLDONTLIE_API_KEY || "";
 const BALLDONTLIE_PGA_BASE = (process.env.BALLDONTLIE_PGA_BASE_URL || "https://api.balldontlie.io/pga/v1").replace(/\/+$/, "");
+const DATAGOLF_API_KEY = process.env.DATAGOLF_API_KEY || "";
+const DATAGOLF_BASE_URL = (process.env.DATAGOLF_BASE_URL || "https://feeds.datagolf.com").replace(/\/+$/, "");
 
 // Alternative free API (no key required, less detail):
 const THE_SPORTS_DB_KEY = process.env.THE_SPORTS_DB_KEY || "3";
@@ -385,6 +387,62 @@ async function fetchSportsDataScores(internalTournamentId) {
  * Call this once when setting up: GET /api/admin/seed-golfers
  */
 async function seedGolfers(supabase) {
+  const pickFirstArray = (json, keys) => {
+    if (Array.isArray(json)) return json;
+    if (!json || typeof json !== "object") return [];
+    for (const k of keys || []) {
+      if (Array.isArray(json[k])) return json[k];
+    }
+    for (const v of Object.values(json)) {
+      if (Array.isArray(v)) return v;
+    }
+    return [];
+  };
+
+  const fromDataGolf = async () => {
+    if (!DATAGOLF_API_KEY) return null;
+    const plUrl = `${DATAGOLF_BASE_URL}/get-player-list?file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
+    const rkUrl = `${DATAGOLF_BASE_URL}/preds/get-dg-rankings?file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
+
+    const [plResp, rkResp] = await Promise.all([
+      fetch(plUrl, { timeout: 12000 }),
+      fetch(rkUrl, { timeout: 12000 }),
+    ]);
+    if (!plResp.ok) throw new Error(`DataGolf player list returned ${plResp.status}`);
+    if (!rkResp.ok) throw new Error(`DataGolf rankings returned ${rkResp.status}`);
+
+    const [plJson, rkJson] = await Promise.all([plResp.json(), rkResp.json()]);
+    const players = pickFirstArray(plJson, ["players", "data", "player_list", "list"]);
+    const ranks = pickFirstArray(rkJson, ["rankings", "data", "players", "results"]);
+
+    const rankMap = new Map();
+    for (const r of ranks) {
+      const id = Number(r?.dg_id ?? r?.dgid ?? r?.datagolf_id ?? r?.player_id ?? r?.id);
+      if (!Number.isFinite(id) || id <= 0) continue;
+      const owgr = Number(r?.owgr_rank ?? r?.owgr ?? r?.world_rank ?? r?.rank ?? r?.owgrRank);
+      if (Number.isFinite(owgr) && owgr > 0) rankMap.set(id, owgr);
+    }
+
+    const nowIso = new Date().toISOString();
+    const rows = [];
+    for (const p of players) {
+      const id = Number(p?.dg_id ?? p?.dgid ?? p?.datagolf_id ?? p?.player_id ?? p?.id);
+      if (!Number.isFinite(id) || id <= 0) continue;
+      const name = String(p?.player_name ?? p?.full_name ?? p?.name ?? p?.player ?? "").trim();
+      if (!name) continue;
+      const country = p?.country || p?.nationality || p?.country_code || p?.country_name || null;
+      const world_rank = rankMap.get(id) || null;
+      rows.push({
+        id,
+        name,
+        country,
+        world_rank,
+        updated_at: nowIso,
+      });
+    }
+    return rows.length ? rows : null;
+  };
+
   const fromSportsData = async () => {
     if (!SPORTS_DATA_KEY) return null;
     const url = `${SPORTS_DATA_BASE}/Players?key=${SPORTS_DATA_KEY}`;
@@ -433,12 +491,20 @@ async function seedGolfers(supabase) {
 
   let rows = null;
   try {
-    rows = SCORE_PROVIDER === "SPORTSDATAIO" && USE_SPORTSDATAIO
-      ? await fromSportsData()
-      : await fromTheSportsDb();
+    // Prefer DataGolf when configured (best coverage for players + OWGR).
+    rows = DATAGOLF_API_KEY ? await fromDataGolf() : null;
+    if (!rows?.length) {
+      rows = SCORE_PROVIDER === "SPORTSDATAIO" && USE_SPORTSDATAIO
+        ? await fromSportsData()
+        : await fromTheSportsDb();
+    }
     if (!rows?.length && USE_SPORTSDATAIO) rows = await fromSportsData();
   } catch {
-    rows = USE_SPORTSDATAIO ? await fromSportsData() : null;
+    try {
+      rows = DATAGOLF_API_KEY ? await fromDataGolf() : null;
+    } catch {
+      rows = USE_SPORTSDATAIO ? await fromSportsData() : null;
+    }
   }
 
   if (!rows?.length) return { error: "No golfers returned from provider(s)" };

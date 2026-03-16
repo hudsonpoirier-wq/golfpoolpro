@@ -13,7 +13,8 @@ function ensureDraftClock(poolId, pickNum, shotClock, lastPickAtMs) {
   const existing = draftClocks.get(key);
   if (!existing || existing.pickNum !== pickNum) {
     // Start the current pick clock at the time the previous pick was made (or now for pick 0).
-    const startedAtMs = Number.isFinite(Number(lastPickAtMs)) ? Number(lastPickAtMs) : Date.now();
+    const lastMs = typeof lastPickAtMs === "number" ? lastPickAtMs : null;
+    const startedAtMs = Number.isFinite(lastMs) && lastMs > 0 ? lastMs : Date.now();
     const next = { pickNum, startedAtMs, pausedRemainingSec: null };
     draftClocks.set(key, next);
     return next;
@@ -27,8 +28,9 @@ function ensureDraftClock(poolId, pickNum, shotClock, lastPickAtMs) {
 }
 
 function computeTimeRemaining(clock, shotClock) {
-  const elapsed = (Date.now() - clock.startedAtMs) / 1000;
-  return Math.max(0, Number(shotClock || 0) - elapsed);
+  const total = Number.isFinite(Number(shotClock)) && Number(shotClock) > 0 ? Number(shotClock) : 60;
+  const elapsed = (Date.now() - Number(clock.startedAtMs || 0)) / 1000;
+  return Math.max(0, total - elapsed);
 }
 
 // ─── GET /api/draft/:poolId ───────────────────────────────────
@@ -95,8 +97,8 @@ router.get("/:poolId", requireAuth, async (req, res, next) => {
 
     // Auto-skip if clock has expired
     if (!paused && !isDone && timeRemaining <= 0 && currentPickOwner) {
-      await autoSkip(sb, poolId, currentPickOwner, pool, picks, draftOrder);
-      return res.redirect(307, `/api/draft/${poolId}`);
+      const didSkip = await autoSkip(sb, poolId, currentPickOwner, pool, picks, draftOrder);
+      if (didSkip) return res.redirect(307, `/api/draft/${poolId}`);
     }
 
     res.json({
@@ -324,16 +326,21 @@ function buildSnakeOrder(userIds, teamSize) {
 }
 
 async function autoSkip(sb, poolId, userId, pool, picks, draftOrder) {
-  // Pick the highest-ranked available golfer automatically
-  const { data: scores } = await sb
-    .from("golfers")
-    .select("id, world_rank")
-    .order("world_rank")
-    .limit(200);
+  // Pick the highest-ranked available golfer automatically, but ONLY from this tournament's field.
+  const tournamentId = pool?.tournament_id;
+  if (!tournamentId) return false;
 
-  const takenIds = new Set(picks.map(p => p.golfer_id));
-  const nextGolfer = scores?.find(g => !takenIds.has(g.id));
-  if (!nextGolfer) return;
+  const { data: fieldRows } = await sb
+    .from("tournament_scores")
+    .select("golfer_id, golfer:golfers(id, world_rank)")
+    .eq("tournament_id", tournamentId);
+
+  const field = (fieldRows || []).map((r) => r.golfer).filter(Boolean);
+  field.sort((a, b) => Number(a.world_rank || 9999) - Number(b.world_rank || 9999));
+
+  const takenIds = new Set(picks.map((p) => p.golfer_id));
+  const nextGolfer = field.find((g) => !takenIds.has(g.id));
+  if (!nextGolfer) return false;
 
   await sb.from("draft_picks").insert({
     pool_id: poolId,
@@ -354,6 +361,8 @@ async function autoSkip(sb, poolId, userId, pool, picks, draftOrder) {
   if (picks.length + 1 >= draftOrder.length) {
     await sb.from("pools").update({ status: "live" }).eq("id", poolId);
   }
+
+  return true;
 }
 
 router._stats = () => ({

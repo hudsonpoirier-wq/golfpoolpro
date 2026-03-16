@@ -129,8 +129,9 @@ select.inp{cursor:pointer}
 
 /* PICK ROW */
 .pick-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:9px;background:var(--cream);border:1px solid var(--parchment);margin-bottom:6px;cursor:pointer;transition:all .16s}
-.pick-row:hover:not(.drafted){background:#fff;box-shadow:var(--sh);border-color:var(--forest-pale);transform:translateX(2px)}
+.pick-row:hover:not(.drafted):not(.disabled){background:#fff;box-shadow:var(--sh);border-color:var(--forest-pale);transform:translateX(2px)}
 .pick-row.drafted{opacity:.32;cursor:default;pointer-events:none}
+.pick-row.disabled{opacity:.55;cursor:not-allowed}
 .pick-row.highlight{background:rgba(27,67,50,.07);border-color:var(--forest-mid)}
 
 /* LEADERBOARD */
@@ -757,6 +758,8 @@ export default function GolfPoolPro() {
   const [timer,setTimer] = useState(60);
   const [draftActive,setDraftActive] = useState(false);
   const [draftDone,setDraftDone] = useState(false);
+  const [pickBusy,setPickBusy] = useState(false);
+  const pickBusyRef = useRef(false);
   const [search,setSearch] = useState("");
   const [saved,setSaved] = useState(false);
   const timerRef = useRef(null);
@@ -1453,39 +1456,29 @@ export default function GolfPoolPro() {
 
   const makePick = async (golferId,auto=false) => {
     if(!draftActive||draftDone) return;
-    if (!auto && effectiveUserId && currentParticipant?.id && String(currentParticipant.id) !== String(effectiveUserId)) {
-      if (isHostOfActivePool && activePool?.id && apiToken.get()) {
+    const isShared = !!(activePool?.id && apiToken.get());
+    const isMyTurn = !effectiveUserId || String(currentParticipant?.id) === String(effectiveUserId);
+
+    let mode = "pick"; // "pick" | "force"
+    if (!auto && !isMyTurn) {
+      if (isShared && isHostOfActivePool) {
         const ok = window.confirm(`Force-pick for ${currentParticipant?.name || "current drafter"}?`);
         if (!ok) return;
-        try {
-          await Draft.forcePick(activePool.id, golferId);
-          const state = await Draft.state(activePool.id);
-          const picks = state?.picks || [];
-          const mapped = picks.map((p)=>({
-            golferId: p.golfer_id,
-            participantId: p.user_id,
-            pickNum: p.pick_number,
-          }));
-          setDrafted(mapped);
-          setAllDrafted(ad=>({...ad,[activePool.id]:mapped}));
-          setCurrentPick(picks.length);
-          if (state?.isDone || picks.length >= totalPicks) {
-            setDraftDone(true);
-            setDraftActive(false);
-          }
-          return;
-        } catch (e) {
-          notify(e?.message || "Force pick failed. Try again.", "error");
-          return;
-        }
+        mode = "force";
+      } else {
+        notify("It's not your turn to pick.", "error");
+        return;
       }
-      notify("It's not your turn to pick.", "error");
-      return;
     }
 
-    if (activePool?.id && apiToken.get()) {
-      try {
-        await Draft.pick(activePool.id, golferId);
+    if (pickBusyRef.current) return;
+    pickBusyRef.current = true;
+    setPickBusy(true);
+    try {
+      if (isShared) {
+        if (mode === "force") await Draft.forcePick(activePool.id, golferId);
+        else await Draft.pick(activePool.id, golferId);
+
         const state = await Draft.state(activePool.id);
         const picks = state?.picks || [];
         const mapped = picks.map((p)=>({
@@ -1501,25 +1494,28 @@ export default function GolfPoolPro() {
           setDraftActive(false);
         }
         return;
-      } catch (e) {
-        notify(e?.message || "Pick failed. Refresh and try again.", "error");
-        return;
       }
-    }
 
-    clearInterval(timerRef.current);
-    const pId = baseParticipantOrder[snakeOrder[currentPick]]?.id;
-    if (!pId) return;
-    const newPick = {golferId,participantId:pId,pickNum:currentPick,auto};
-    setDrafted(d=>[...d,newPick]);
-    if(activePool){
-      setAllDrafted(ad=>({...ad,[activePool.id]:[...(ad[activePool.id]||[]),newPick]}));
+      // Local/demo draft
+      clearInterval(timerRef.current);
+      const pId = baseParticipantOrder[snakeOrder[currentPick]]?.id;
+      if (!pId) return;
+      const newPick = {golferId,participantId:pId,pickNum:currentPick,auto};
+      setDrafted(d=>[...d,newPick]);
+      if(activePool){
+        setAllDrafted(ad=>({...ad,[activePool.id]:[...(ad[activePool.id]||[]),newPick]}));
+      }
+      const next = currentPick+1;
+      if(next>=totalPicks){ setDraftDone(true); setDraftActive(false); return; }
+      setCurrentPick(next);
+      const sc = activePool?.shotClock||config.shotClock;
+      setTimer(sc);
+    } catch (e) {
+      notify(e?.message || "Pick failed. Refresh and try again.", "error");
+    } finally {
+      pickBusyRef.current = false;
+      setPickBusy(false);
     }
-    const next = currentPick+1;
-    if(next>=totalPicks){ setDraftDone(true); setDraftActive(false); return; }
-    setCurrentPick(next);
-    const sc = activePool?.shotClock||config.shotClock;
-    setTimer(sc);
   };
 
   const startDraft = () => {
@@ -2836,11 +2832,27 @@ export default function GolfPoolPro() {
                         </div>
                       </div>
                       <div style={{flex:1,overflowY:"auto",padding:"0 10px 10px"}}>
-                        {filteredField.filter(g=>!drafted.find(d=>d.golferId===g.id)).map(g=>{
-                          const isMyTurn=draftActive&&!draftDone&&!draftPaused&&(!effectiveUserId||String(currentParticipant?.id)===String(effectiveUserId));
-                          return (
-                            <div key={g.id} className="pick-row"
-                              onClick={()=>isMyTurn&&makePick(g.id)}>
+                        {(() => {
+                          const isMyTurn = draftActive && !draftDone && !draftPaused && (!effectiveUserId || String(currentParticipant?.id) === String(effectiveUserId));
+                          const canHostForce = !!(apiToken.get() && activePool?.id && isHostOfActivePool);
+                          const canClick = draftActive && !draftDone && !draftPaused && !pickBusy && (isMyTurn || canHostForce);
+                          const avail = filteredField.filter(g=>!drafted.find(d=>d.golferId===g.id));
+
+                          if (!avail.length) {
+                            return (
+                              <p style={{fontSize:13,color:"var(--muted)",textAlign:"center",padding:"40px 0"}}>
+                                No available players found
+                              </p>
+                            );
+                          }
+
+                          return avail.map((g)=>(
+                            <div
+                              key={g.id}
+                              className={`pick-row ${canClick ? "" : "disabled"}`}
+                              onClick={()=>canClick && makePick(g.id)}
+                              title={!canClick ? (pickBusy ? "Pick in progress..." : (draftPaused ? "Draft is paused." : (isMyTurn ? "Waiting..." : "Not your turn."))) : "Draft this player"}
+                            >
                               <div style={{width:26,height:26,borderRadius:7,background:"var(--forest)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0}}>
                                 {g.rank}
                               </div>
@@ -2850,11 +2862,8 @@ export default function GolfPoolPro() {
                               </div>
                               <p style={{fontSize:12,fontWeight:700,color:"var(--forest)",flexShrink:0}}>{g.drivDist} yds</p>
                             </div>
-                          );
-                        })}
-                        {filteredField.filter(g=>!drafted.find(d=>d.golferId===g.id)).length===0&&(
-                          <p style={{fontSize:13,color:"var(--muted)",textAlign:"center",padding:"40px 0"}}>No available players found</p>
-                        )}
+                          ));
+                        })()}
                       </div>
                     </div>
 

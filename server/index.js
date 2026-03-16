@@ -413,6 +413,13 @@ const DATAGOLF_RATE_LIMIT_PER_MIN = Number(process.env.DATAGOLF_RATE_LIMIT_PER_M
 const DATAGOLF_STATE = { minuteKey: null, minuteCount: 0, nextAllowedAtMs: 0 };
 const DATAGOLF_CACHE = new Map(); // url -> { ts, json }
 
+// Longer-lived, normalized DataGolf reference data (player list + rankings)
+// Used to ensure projected fields include the right names/countries and have stable OWGR sorting.
+const DATAGOLF_PLAYERLIST_TTL_MS = Number(process.env.DATAGOLF_PLAYERLIST_TTL_MS || 12 * 60 * 60 * 1000); // 12h
+const DATAGOLF_RANKINGS_TTL_MS = Number(process.env.DATAGOLF_RANKINGS_TTL_MS || 30 * 60 * 1000); // 30m
+const DATAGOLF_PLAYERLIST_STATE = { ts: 0, map: new Map() }; // dg_id -> { name, country }
+const DATAGOLF_RANKINGS_STATE = { ts: 0, map: new Map() }; // dg_id -> { world_rank }
+
 function datagolfMinuteKey() {
   const now = new Date();
   const y = now.getUTCFullYear();
@@ -466,6 +473,100 @@ async function datagolfFetchJson(url) {
   return json;
 }
 
+function pickFirstArray(json, keys) {
+  if (Array.isArray(json)) return json;
+  if (!json || typeof json !== "object") return [];
+  for (const k of keys || []) {
+    if (Array.isArray(json[k])) return json[k];
+  }
+  // Some endpoints return { data: { players: [...] } }-style shapes.
+  for (const v of Object.values(json)) {
+    if (Array.isArray(v)) return v;
+  }
+  return [];
+}
+
+async function getDataGolfPlayerListMap() {
+  if (!DATAGOLF_API_KEY) return new Map();
+  if (DATAGOLF_PLAYERLIST_STATE.map.size && (Date.now() - DATAGOLF_PLAYERLIST_STATE.ts) < DATAGOLF_PLAYERLIST_TTL_MS) {
+    return DATAGOLF_PLAYERLIST_STATE.map;
+  }
+  const url = `${DATAGOLF_BASE_URL}/get-player-list?file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
+  const json = await datagolfFetchJson(url);
+  const items = pickFirstArray(json, ["players", "data", "player_list", "list"]);
+  const next = new Map();
+  for (const row of items) {
+    if (!row || typeof row !== "object") continue;
+    const id = Number(row.dg_id ?? row.dgid ?? row.datagolf_id ?? row.player_id ?? row.id);
+    if (!Number.isFinite(id) || id <= 0) continue;
+    const name = normalizePlayerName(row.player_name ?? row.full_name ?? row.name ?? row.player ?? row.display_name ?? "");
+    if (!name) continue;
+    const country = row.country || row.nationality || row.country_code || row.country_name || null;
+    next.set(id, { name, country });
+  }
+  if (next.size) {
+    DATAGOLF_PLAYERLIST_STATE.ts = Date.now();
+    DATAGOLF_PLAYERLIST_STATE.map = next;
+  }
+  return DATAGOLF_PLAYERLIST_STATE.map;
+}
+
+async function getDataGolfRankingsMap() {
+  if (!DATAGOLF_API_KEY) return new Map();
+  if (DATAGOLF_RANKINGS_STATE.map.size && (Date.now() - DATAGOLF_RANKINGS_STATE.ts) < DATAGOLF_RANKINGS_TTL_MS) {
+    return DATAGOLF_RANKINGS_STATE.map;
+  }
+  const url = `${DATAGOLF_BASE_URL}/preds/get-dg-rankings?file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
+  const json = await datagolfFetchJson(url);
+  const items = pickFirstArray(json, ["rankings", "data", "players", "results"]);
+  const next = new Map();
+  for (const row of items) {
+    if (!row || typeof row !== "object") continue;
+    const id = Number(row.dg_id ?? row.dgid ?? row.datagolf_id ?? row.player_id ?? row.id);
+    if (!Number.isFinite(id) || id <= 0) continue;
+    const worldRank = Number(row.owgr_rank ?? row.owgr ?? row.world_rank ?? row.rank ?? row.owgrRank);
+    if (Number.isFinite(worldRank) && worldRank > 0) next.set(id, { world_rank: worldRank });
+  }
+  if (next.size) {
+    DATAGOLF_RANKINGS_STATE.ts = Date.now();
+    DATAGOLF_RANKINGS_STATE.map = next;
+  }
+  return DATAGOLF_RANKINGS_STATE.map;
+}
+
+async function enrichPlayersFromDataGolfRefs(players) {
+  const rows = Array.isArray(players) ? players : [];
+  if (!rows.length) return [];
+  const needsList = rows.some((p) => Number(p?.id) > 0 && (!p?.name || !p?.country));
+  const needsRank = rows.some((p) => Number(p?.id) > 0 && !(Number(p?.world_rank) > 0));
+
+  let listMap = null;
+  let rankMap = null;
+  try {
+    if (needsList) listMap = await getDataGolfPlayerListMap();
+    if (needsRank) rankMap = await getDataGolfRankingsMap();
+  } catch {
+    // If the reference endpoints fail, keep raw players; field import should still work.
+  }
+
+  return rows
+    .map((p) => {
+      const id = Number(p?.id) || null;
+      const out = { ...p };
+      if (id && listMap?.has(id)) {
+        const meta = listMap.get(id);
+        if (!out.name && meta?.name) out.name = meta.name;
+        if (!out.country && meta?.country) out.country = meta.country;
+      }
+      if (id && rankMap?.has(id)) {
+        const meta = rankMap.get(id);
+        if (!(Number(out.world_rank) > 0) && Number(meta?.world_rank) > 0) out.world_rank = Number(meta.world_rank);
+      }
+      return out;
+    })
+    .filter((p) => p?.name);
+}
+
 function normKey(v) {
   return String(v || "")
     .toLowerCase()
@@ -508,23 +609,63 @@ async function fetchDataGolfFieldPlayers(tournament) {
 
   const urlsTried = [];
   let scheduleEventId = null;
+  let scheduleEventName = null;
+
+  // 0) If this is already a DataGolf-sourced schedule row (id starts with dg_), the event_id is in the id.
+  const tid = String(tournament?.id || "");
+  if (tid.startsWith("dg_")) {
+    scheduleEventId = tid.slice(3);
+    scheduleEventName = tournament?.name || null;
+  }
+
+  // 1) For our stable internal ids (t1..t20), prefer matching against the dg_* tournament row
+  // we already store in Supabase so we don't waste DataGolf API calls and we get a reliable event_id.
+  if (!scheduleEventId && tournament?.start_date) {
+    try {
+      const base = new Date(`${String(tournament.start_date).slice(0, 10)}T00:00:00Z`);
+      if (!Number.isNaN(base.getTime())) {
+        const min = new Date(base); min.setUTCDate(min.getUTCDate() - 10);
+        const max = new Date(base); max.setUTCDate(max.getUTCDate() + 10);
+        const minIso = min.toISOString().slice(0, 10);
+        const maxIso = max.toISOString().slice(0, 10);
+
+        const { data: candidates } = await supabase
+          .from("tournaments")
+          .select("id, name, start_date")
+          .like("id", "dg_%")
+          .gte("start_date", minIso)
+          .lte("start_date", maxIso)
+          .order("start_date", { ascending: true });
+
+        const list = Array.isArray(candidates) ? candidates : [];
+        const best = pickBestDataGolfEvent(list, tournament);
+        if (best?.id && String(best.id).startsWith("dg_")) {
+          scheduleEventId = String(best.id).slice(3);
+          scheduleEventName = best?.name || null;
+        }
+      }
+    } catch {}
+  }
 
   // Use DataGolf schedule to get a stable event_id, then match that in field-updates.
   // This is critical for majors where name-only matching can accidentally pick the wrong week.
-  try {
-    const year = String(tournament?.start_date || "").slice(0, 4) || String(new Date().getUTCFullYear());
-    const scheduleUrl = `${DATAGOLF_BASE_URL}/get-schedule?tour=all&season=${encodeURIComponent(year)}&upcoming_only=no&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
-    urlsTried.push(scheduleUrl);
-    const scheduleJson = await datagolfFetchJson(scheduleUrl);
-    const scheduleItems = []
-      .concat(scheduleJson?.schedule || [])
-      .concat(scheduleJson?.events || [])
-      .concat(scheduleJson?.data || [])
-      .concat(Array.isArray(scheduleJson) ? scheduleJson : [])
-      .filter((x) => x && typeof x === "object");
-    const bestEvent = pickBestDataGolfEvent(scheduleItems, tournament);
-    scheduleEventId = bestEvent?.event_id ?? bestEvent?.eventId ?? bestEvent?.id ?? null;
-  } catch {}
+  if (!scheduleEventId) {
+    try {
+      const year = String(tournament?.start_date || "").slice(0, 4) || String(new Date().getUTCFullYear());
+      const scheduleUrl = `${DATAGOLF_BASE_URL}/get-schedule?tour=all&season=${encodeURIComponent(year)}&upcoming_only=no&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
+      urlsTried.push(scheduleUrl);
+      const scheduleJson = await datagolfFetchJson(scheduleUrl);
+      const scheduleItems = []
+        .concat(scheduleJson?.schedule || [])
+        .concat(scheduleJson?.events || [])
+        .concat(scheduleJson?.data || [])
+        .concat(Array.isArray(scheduleJson) ? scheduleJson : [])
+        .filter((x) => x && typeof x === "object");
+      const bestEvent = pickBestDataGolfEvent(scheduleItems, tournament);
+      scheduleEventId = bestEvent?.event_id ?? bestEvent?.eventId ?? bestEvent?.id ?? null;
+      scheduleEventName = scheduleEventName || bestEvent?.event_name || bestEvent?.name || null;
+    } catch {}
+  }
 
   const coercePlayers = (arr) => (arr || [])
     .map((p) => ({
@@ -533,7 +674,8 @@ async function fetchDataGolfFieldPlayers(tournament) {
       country: p.country || p.nationality || null,
       world_rank: Number(p.owgr || p.owgr_rank || p.world_rank || p.rank) || null,
     }))
-    .filter((p) => p.name);
+    // Allow missing names as long as we have a dg_id; we can enrich from DataGolf player list.
+    .filter((p) => p.id || p.name);
 
   const findBestPlayerArray = (node) => {
     let best = [];
@@ -574,6 +716,7 @@ async function fetchDataGolfFieldPlayers(tournament) {
     return hasPlayer && hasEvent;
   };
   const pickBestPlayersFromFlatRows = (flatRows) => {
+    const scheduleName = normKey(scheduleEventName || "");
     const groups = new Map(); // key -> { event_id, event_name, start_date, rows }
     for (const row of flatRows || []) {
       if (!looksLikeFlatPlayerRow(row)) continue;
@@ -609,7 +752,9 @@ async function fetchDataGolfFieldPlayers(tournament) {
     for (const g of groups.values()) {
       const evName = normKey(g.event_name || "");
       if (!evName) continue;
-      const namePenalty = (evName.includes(targetName) || targetName.includes(evName)) ? 0 : 40;
+      const namePenalty =
+        (scheduleName && (evName.includes(scheduleName) || scheduleName.includes(evName))) ? 0 :
+        ((evName.includes(targetName) || targetName.includes(evName)) ? 10 : 40);
       const datePenalty = dateDistanceDays(targetDate, g.start_date);
       const players = coercePlayers(g.rows);
       if (!players.length) continue;
@@ -625,6 +770,7 @@ async function fetchDataGolfFieldPlayers(tournament) {
   };
 
   const pickBestEventFromPayload = (json) => {
+    const scheduleName = normKey(scheduleEventName || "");
     const candidates = [];
     if (Array.isArray(json)) candidates.push(...json);
     if (json && typeof json === "object") {
@@ -641,7 +787,9 @@ async function fetchDataGolfFieldPlayers(tournament) {
     for (const ev of candidates.filter((x) => x && typeof x === "object")) {
       const evName = getEventName(ev);
       if (!evName) continue;
-      const namePenalty = (evName.includes(targetName) || targetName.includes(evName)) ? 0 : 40;
+      const namePenalty =
+        (scheduleName && (evName.includes(scheduleName) || scheduleName.includes(evName))) ? 0 :
+        ((evName.includes(targetName) || targetName.includes(evName)) ? 10 : 40);
       const datePenalty = dateDistanceDays(targetDate, getEventDate(ev));
 
       // Extract player list from common keys first, then fallback to a recursive search.
@@ -676,7 +824,8 @@ async function fetchDataGolfFieldPlayers(tournament) {
       if (Array.isArray(json) && json.length && looksLikeFlatPlayerRow(json[0])) {
         const flat = pickBestPlayersFromFlatRows(json);
         if (flat.players?.length) {
-          return { players: flat.players, provider: "DataGolf", url, urlsTried, event_id: flat.event_id || null };
+          const players = await enrichPlayersFromDataGolfRefs(flat.players);
+          return { players, provider: "DataGolf", url, urlsTried, event_id: flat.event_id || null };
         }
       }
 
@@ -698,14 +847,16 @@ async function fetchDataGolfFieldPlayers(tournament) {
             findBestPlayerArray(match);
           const players = coercePlayers(rawList);
           if (players.length) {
-            return { players, provider: "DataGolf", url, urlsTried, event_id: String(scheduleEventId) };
+            const enriched = await enrichPlayersFromDataGolfRefs(players);
+            return { players: enriched, provider: "DataGolf", url, urlsTried, event_id: String(scheduleEventId) };
           }
         }
       }
 
       const out = pickBestEventFromPayload(json);
       if (out.players?.length) {
-        return { players: out.players, provider: "DataGolf", url, urlsTried };
+        const players = await enrichPlayersFromDataGolfRefs(out.players);
+        return { players, provider: "DataGolf", url, urlsTried };
       }
     } catch {}
   }
@@ -1001,36 +1152,34 @@ async function fetchBallDontLieFieldPlayers(tournament) {
 }
 
 async function importFieldPlayersIntoTournament(tournamentId, players) {
-  const canSafelyReplaceField = async () => {
-    try {
-      // Never replace if any pool has already drafted picks for this tournament.
-      const { data: poolsForTournament, error: poolsErr } = await supabase
-        .from("pools")
-        .select("id")
-        .eq("tournament_id", tournamentId);
-      if (poolsErr) return false;
-      const poolIds = (poolsForTournament || []).map((p) => p.id).filter(Boolean);
-      if (poolIds.length) {
-        const { count: pickCount, error: picksErr } = await supabase
-          .from("draft_picks")
-          .select("*", { count: "exact", head: true })
-          .in("pool_id", poolIds);
-        if (picksErr) return false;
-        if (Number(pickCount || 0) > 0) return false;
-      }
+  const getPoolsForTournament = async () => {
+    const { data, error } = await supabase
+      .from("pools")
+      .select("id")
+      .eq("tournament_id", tournamentId);
+    if (error) throw error;
+    return (data || []).map((p) => p.id).filter(Boolean);
+  };
 
-      // Never replace if any non-shell score fields have been populated.
-      // Shell field imports keep these NULL.
-      const { count: realCount, error: realErr } = await supabase
-        .from("tournament_scores")
-        .select("*", { count: "exact", head: true })
-        .eq("tournament_id", tournamentId)
-        .or("position.not.is.null,r1.not.is.null,r2.not.is.null,r3.not.is.null,r4.not.is.null");
-      if (realErr) return false;
-      return Number(realCount || 0) === 0;
-    } catch {
-      return false;
-    }
+  const getDraftedGolferIdsForTournament = async () => {
+    const poolIds = await getPoolsForTournament();
+    if (!poolIds.length) return new Set();
+    const { data, error } = await supabase
+      .from("draft_picks")
+      .select("golfer_id")
+      .in("pool_id", poolIds);
+    if (error) throw error;
+    return new Set((data || []).map((p) => p.golfer_id).filter(Boolean));
+  };
+
+  const tournamentHasRealScores = async () => {
+    const { count, error } = await supabase
+      .from("tournament_scores")
+      .select("*", { count: "exact", head: true })
+      .eq("tournament_id", tournamentId)
+      .or("position.not.is.null,r1.not.is.null,r2.not.is.null,r3.not.is.null,r4.not.is.null");
+    if (error) throw error;
+    return Number(count || 0) > 0;
   };
 
   const uniqueByName = new Map();
@@ -1063,9 +1212,16 @@ async function importFieldPlayersIntoTournament(tournamentId, players) {
     .upsert(golferRows, { onConflict: "id" });
   if (golfersError) return { error: golfersError.message };
 
-  // If we previously imported a provisional/incorrect shell list, and nobody has drafted yet,
-  // replace the shell field so field size + draft list stay accurate.
-  if (await canSafelyReplaceField()) {
+  // If we previously imported a provisional/incorrect shell list:
+  // - Replace it completely when there are no draft picks yet
+  // - Otherwise, reconcile by trimming extras that aren't in the new field and haven't been drafted
+  // Never touch fields once real scoring has started.
+  let draftedIds = new Set();
+  let hasRealScores = false;
+  try { draftedIds = await getDraftedGolferIdsForTournament(); } catch {}
+  try { hasRealScores = await tournamentHasRealScores(); } catch {}
+
+  if (!hasRealScores && draftedIds.size === 0) {
     try {
       await supabase
         .from("tournament_scores")
@@ -1084,11 +1240,41 @@ async function importFieldPlayersIntoTournament(tournamentId, players) {
     .upsert(scoreShellRows, { onConflict: "tournament_id,golfer_id", ignoreDuplicates: true });
   if (scoreShellError) return { error: scoreShellError.message };
 
+  // If picks exist, reconcile by deleting extra shell rows not in the new field and not drafted.
+  if (!hasRealScores && draftedIds.size > 0) {
+    try {
+      const newIds = new Set(golferRows.map((g) => g.id));
+      const keepIds = new Set([...newIds, ...draftedIds]);
+      const { data: existing } = await supabase
+        .from("tournament_scores")
+        .select("golfer_id")
+        .eq("tournament_id", tournamentId);
+      const toDelete = (existing || [])
+        .map((r) => r.golfer_id)
+        .filter((id) => id && !keepIds.has(id));
+      if (toDelete.length) {
+        await supabase
+          .from("tournament_scores")
+          .delete()
+          .eq("tournament_id", tournamentId)
+          .in("golfer_id", toDelete);
+      }
+    } catch {}
+  }
+
   // Keep tournaments.field_size aligned to what we actually have draftable.
   try {
+    let fieldSize = golferRows.length;
+    if (draftedIds.size > 0 && !hasRealScores) {
+      const { count } = await supabase
+        .from("tournament_scores")
+        .select("*", { count: "exact", head: true })
+        .eq("tournament_id", tournamentId);
+      if (Number(count || 0) > 0) fieldSize = Number(count);
+    }
     await supabase
       .from("tournaments")
-      .update({ field_size: golferRows.length })
+      .update({ field_size: fieldSize })
       .eq("id", tournamentId);
   } catch {}
 
