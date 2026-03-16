@@ -720,7 +720,12 @@ function pickProjectedFieldArrayFromNextData(major, nextDataJson) {
       if (x.length >= 40 && x.length <= 250 && typeof x[0] === "object") {
         const sample = x.slice(0, 20).filter(Boolean);
         const nameCount = sample.filter((p) => typeof (p?.player_name || p?.name || p?.full_name) === "string").length;
-        if (nameCount >= Math.max(8, Math.floor(sample.length * 0.6))) {
+        const idCount = sample.filter((p) => Number(p?.dg_id ?? p?.dgid ?? p?.datagolf_id ?? p?.player_id ?? p?.id) > 0).length;
+        // Major fields often have stable DG ids even if names are stored elsewhere in the payload.
+        const looksLikePlayers =
+          (nameCount >= Math.max(6, Math.floor(sample.length * 0.4))) ||
+          (idCount >= Math.max(10, Math.floor(sample.length * 0.6)));
+        if (looksLikePlayers) {
           const hasLocked = sample.some((p) => "locked" in p || "on_track" in p || "onTrack" in p);
           const hasExempt = sample.some((p) => "exemptions" in p || "exemption" in p || "exempt" in p);
           const hasInField = sample.some((p) => "in_field" in p || "inField" in p || "projected" in p);
@@ -855,24 +860,19 @@ async function fetchDataGolfMajorFieldPlayers(tournament) {
       playerObjs = candidates;
     }
 
-    // Normalize + dedupe by name early.
-    const uniqueByName = new Map();
+    // Normalize + dedupe. Prefer DG ids when present; otherwise fall back to name keying.
+    const unique = new Map(); // key -> { id, name }
     for (const p of playerObjs || []) {
+      const id = Number(p?.dg_id ?? p?.dgid ?? p?.datagolf_id ?? p?.player_id ?? p?.id) || null;
       const name = normalizePlayerName(p?.player_name || p?.full_name || p?.name || p?.player || p?.playerName || "");
-      if (!name) continue;
-      const k = normKey(name);
-      if (!k) continue;
-      if (!uniqueByName.has(k)) {
-        uniqueByName.set(k, {
-          id: Number(p?.dg_id ?? p?.dgid ?? p?.datagolf_id ?? p?.player_id ?? p?.id) || null,
-          name,
-        });
-      }
+      const key = (id && id > 0) ? `id:${id}` : (name ? `name:${normKey(name)}` : null);
+      if (!key) continue;
+      if (!unique.has(key)) unique.set(key, { id, name });
     }
-    const rawPlayers = Array.from(uniqueByName.values())
+    const rawPlayers = Array.from(unique.values())
       .map((p) => ({
         id: Number(p.id) || null,
-        name: p.name,
+        name: p.name || "",
       }))
       .filter((p) => p.id || p.name);
 
