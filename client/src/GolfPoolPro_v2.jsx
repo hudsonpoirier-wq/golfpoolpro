@@ -3706,6 +3706,43 @@ export default function GolfPoolPro() {
                 </div>
               )}
 
+              {invitePool && (
+                <div style={{background:"var(--cream)",border:"1px solid var(--cream-2)",borderRadius:12,padding:"14px 16px",marginBottom:18}}>
+                  <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--cream-2)"}}>
+                    <span style={{fontSize:12,color:"var(--muted)",fontWeight:700,letterSpacing:".3px"}}>POOL</span>
+                    <span style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{invitePool.name}</span>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--cream-2)"}}>
+                    <span style={{fontSize:12,color:"var(--muted)",fontWeight:700,letterSpacing:".3px"}}>TOURNAMENT</span>
+                    <span style={{fontSize:13,fontWeight:700,color:"var(--text)",textAlign:"right"}}>
+                      {invitePool.tournamentName || tournaments.find(t=>t.id===invitePool.tournamentId)?.name || "TBD"}
+                    </span>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--cream-2)"}}>
+                    <span style={{fontSize:12,color:"var(--muted)",fontWeight:700,letterSpacing:".3px"}}>SPOTS</span>
+                    <span style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>
+                      {Number(invitePool.participants || 0)}/{Number(invitePool.maxParticipants || 8)}
+                    </span>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--cream-2)"}}>
+                    <span style={{fontSize:12,color:"var(--muted)",fontWeight:700,letterSpacing:".3px"}}>TEAM SIZE</span>
+                    <span style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{invitePool.teamSize || 4} golfers</span>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--cream-2)"}}>
+                    <span style={{fontSize:12,color:"var(--muted)",fontWeight:700,letterSpacing:".3px"}}>SCORING</span>
+                    <span style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>Best {invitePool.scoringGolfers || 2}</span>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--cream-2)"}}>
+                    <span style={{fontSize:12,color:"var(--muted)",fontWeight:700,letterSpacing:".3px"}}>CUT RULE</span>
+                    <span style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>Min {invitePool.cutLine || 2} make cut</span>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0"}}>
+                    <span style={{fontSize:12,color:"var(--muted)",fontWeight:700,letterSpacing:".3px"}}>SHOT CLOCK</span>
+                    <span style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{invitePool.shotClock || 60}s</span>
+                  </div>
+                </div>
+              )}
+
               {(authMode==="login" || authMode==="signup") && (
                 <div className="auth-tabs">
                   <button type="button" className={`auth-tab ${authMode==="login"?"on":""}`} onClick={()=>{setAuthMode("login");setAuthError("");setAuthSuccess("");}}>Log In</button>
