@@ -465,7 +465,7 @@ const SG_DATA = {
 const SEED_POOLS = [
   {id:"p1",name:"The Masters Pool 2026",tournamentId:"t4",status:"live",participants:5,maxParticipants:8,yourRank:1,yourScore:-28,teamSize:4,scoringGolfers:2,cutLine:2,shotClock:60,created:"Feb 15",hostId:1},
   {id:"p2",name:"Sunday Showdown",tournamentId:"t1",status:"lobby",participants:3,maxParticipants:8,yourRank:null,yourScore:null,teamSize:3,scoringGolfers:2,cutLine:2,shotClock:60,created:"Mar 1",hostId:1},
-  {id:"p3",name:"Office Golf Classic",tournamentId:"t2",status:"complete",participants:5,maxParticipants:6,yourRank:1,yourScore:-39,teamSize:4,scoringGolfers:3,cutLine:2,shotClock:45,created:"Jan 10",hostId:2},
+  {id:"p3",name:"Office Golf Classic",tournamentId:"t2",status:"complete",participants:5,maxParticipants:12,yourRank:1,yourScore:-39,teamSize:4,scoringGolfers:3,cutLine:2,shotClock:45,created:"Jan 10",hostId:2},
 ];
 
 // Seed accounts — stored in localStorage under "mgpp_accounts"
@@ -713,7 +713,7 @@ export default function GolfPoolPro() {
 
   // Config for new pool creation
   const [config,setConfig] = useState({
-    poolName:"Sunday Showdown",tournament:"",maxParticipants:6,
+    poolName:"Sunday Showdown",tournament:"",maxParticipants:12,
     teamSize:4,scoringGolfers:2,cutLine:2,shotClock:60,draftOrderType:"ordered",
   });
   const [pendingInviteToken, setPendingInviteToken] = useState(() => makeInviteToken());
@@ -830,7 +830,7 @@ export default function GolfPoolPro() {
           id: resolved.id,
           name: resolved.name || "Pool Invite",
           status: resolved.status || "lobby",
-          maxParticipants: resolved.max_participants || 6,
+          maxParticipants: resolved.max_participants || 12,
           participants: resolved.current_members || 0,
           teamSize: resolved.team_size || 4,
           scoringGolfers: resolved.scoring_golfers || 2,
@@ -850,7 +850,7 @@ export default function GolfPoolPro() {
             inviteToken: token,
             status: "lobby",
             participants: 0,
-            maxParticipants: 6,
+            maxParticipants: 12,
             teamSize: 4,
             scoringGolfers: 2,
             cutLine: 2,
@@ -3082,13 +3082,13 @@ export default function GolfPoolPro() {
                   <div className="fgrp">
                     <label className="label">Max Participants</label>
                     <select className="inp" value={config.maxParticipants} onChange={e=>setConfig(c=>({...c,maxParticipants:+e.target.value}))}>
-                      {[2,3,4,5,6].map(n=><option key={n} value={n}>{n} participant{n===1?"":"s"}</option>)}
+                      {[2,3,4,5,6,7,8,9,10,11,12].map(n=><option key={n} value={n}>{n} participants</option>)}
                     </select>
                   </div>
                   <div className="fgrp">
                     <label className="label">Golfers Per Team</label>
                     <select className="inp" value={config.teamSize} onChange={e=>setConfig(c=>({...c,teamSize:+e.target.value,scoringGolfers:Math.min(config.scoringGolfers,+e.target.value)}))}>
-                      {[4,5,6,7,8].map(n=><option key={n} value={n}>{n} golfers per team</option>)}
+                      {[4,5,6,7,8,9,10,11,12].map(n=><option key={n} value={n}>{n} golfers per team</option>)}
                     </select>
                   </div>
                 </div>

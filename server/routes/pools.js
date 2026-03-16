@@ -4,9 +4,9 @@ const router = require("express").Router();
 const { requireAuth } = require("../middleware/auth");
 
 const MIN_PARTICIPANTS = 2;
-const MAX_PARTICIPANTS = 6;
+const MAX_PARTICIPANTS = 12;
 const MIN_TEAM_SIZE = 4;
-const MAX_TEAM_SIZE = 8;
+const MAX_TEAM_SIZE = 12;
 
 function isInt(n) {
   return Number.isInteger(n) && Number.isFinite(n);
@@ -194,7 +194,7 @@ router.post("/", requireAuth, async (req, res, next) => {
   try {
     const sb = req.app.locals.supabase;
     const {
-      name, tournament_id, max_participants = 6,
+      name, tournament_id, max_participants = 12,
       team_size = 4, scoring_golfers = 2,
       cut_line = 2, shot_clock = 60,
     } = req.body;
