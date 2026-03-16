@@ -711,7 +711,7 @@ function majorExpectedCountRange(major) {
   return { min: 50, max: 200 };
 }
 
-function pickProjectedFieldArrayFromNextData(nextDataJson) {
+function pickProjectedFieldArrayFromNextData(major, nextDataJson) {
   const candidates = [];
   const seen = new Set();
   const walk = (x, path, depth) => {
@@ -743,6 +743,8 @@ function pickProjectedFieldArrayFromNextData(nextDataJson) {
 
   if (!candidates.length) return null;
 
+  const { min, max } = majorExpectedCountRange(major);
+
   // Heuristic scoring: prefer arrays that look like the "Projected Field" table.
   const score = (c) => {
     const p = c.path.toLowerCase();
@@ -755,13 +757,22 @@ function pickProjectedFieldArrayFromNextData(nextDataJson) {
     if (c.hasLocked) s += 10;
     if (c.hasExempt) s += 8;
     if (c.hasInField) s += 8;
-    // Prefer realistic-ish sizes (masters smaller than US Open etc, but we don't know major here).
-    const sizePenalty = c.len > 180 ? 20 : c.len < 60 ? 15 : 0;
-    s -= sizePenalty;
+    // Prefer the correct major-sized array, strongly.
+    if (c.len >= min && c.len <= max) {
+      s += 50;
+    } else {
+      // Penalize out-of-range arrays heavily.
+      const off = c.len < min ? (min - c.len) : (c.len - max);
+      s -= Math.min(60, Math.max(15, off));
+    }
     return s;
   };
   candidates.sort((a, b) => score(b) - score(a));
-  return candidates[0].arr;
+  const best = candidates[0];
+  if (!best) return null;
+  // Only accept arrays that match expected size; otherwise, treat Next.js extraction as unavailable.
+  if (!(best.len >= min && best.len <= max)) return null;
+  return best.arr;
 }
 
 async function fetchDataGolfMajorFieldPlayers(tournament) {
@@ -778,21 +789,36 @@ async function fetchDataGolfMajorFieldPlayers(tournament) {
     if (nextDataMatch && nextDataMatch[1]) {
       try {
         const json = JSON.parse(nextDataMatch[1]);
-        const projected = pickProjectedFieldArrayFromNextData(json);
-        if (Array.isArray(projected) && projected.length) {
-          playerObjs = projected;
-        } else {
-          playerObjs = extractPlayersFromAnyJson(json);
-        }
+        const projected = pickProjectedFieldArrayFromNextData(major, json);
+        if (Array.isArray(projected) && projected.length) playerObjs = projected;
       } catch {}
     }
+
+    const sliceProjectedSection = (s) => {
+      const lower = String(s || "").toLowerCase();
+      const start = lower.indexOf("projected field");
+      if (start < 0) return String(s || "");
+      const tails = [
+        "best (eligible) players not in field",
+        "eligible players not in field",
+        "bubble watch",
+        "recent movements",
+        "recent locks",
+        "recent outs",
+      ];
+      let end = -1;
+      for (const t of tails) {
+        const i = lower.indexOf(t, start + 20);
+        if (i >= 0 && (end < 0 || i < end)) end = i;
+      }
+      if (end < 0) end = Math.min(lower.length, start + 220000);
+      return String(s || "").slice(start, end);
+    };
 
     // Try: JSON-ish patterns in page source.
     if (!playerObjs.length) {
       const matches = [];
-      // Try to limit to the Projected Field section if it's present in raw HTML.
-      const idx = html.toLowerCase().indexOf("projected field");
-      const window = idx >= 0 ? html.slice(idx, idx + 250000) : html;
+      const window = sliceProjectedSection(html);
       const re = /\"player_name\"\s*:\s*\"([^\"]+)\"/g;
       let m = null;
       while ((m = re.exec(window))) {
@@ -805,9 +831,10 @@ async function fetchDataGolfMajorFieldPlayers(tournament) {
     // Fallback: Pull likely names from table cells.
     if (!playerObjs.length) {
       const candidates = [];
+      const window = sliceProjectedSection(html);
       const tdRe = /<td[^>]*>([\s\S]*?)<\/td>/gi;
       let m = null;
-      while ((m = tdRe.exec(html))) {
+      while ((m = tdRe.exec(window))) {
         const raw = String(m[1] || "")
           .replace(/<[^>]+>/g, " ")
           .replace(/&amp;/g, "&")
