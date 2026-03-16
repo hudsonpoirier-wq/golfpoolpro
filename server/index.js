@@ -702,6 +702,68 @@ function extractPlayersFromAnyJson(node) {
   return out;
 }
 
+function majorExpectedCountRange(major) {
+  // Use broad but realistic bounds so we never import garbage lists.
+  if (major === "masters") return { min: 60, max: 110 };
+  if (major === "pga") return { min: 120, max: 180 };
+  if (major === "us_open") return { min: 120, max: 180 };
+  if (major === "open") return { min: 120, max: 180 };
+  return { min: 50, max: 200 };
+}
+
+function pickProjectedFieldArrayFromNextData(nextDataJson) {
+  const candidates = [];
+  const seen = new Set();
+  const walk = (x, path, depth) => {
+    if (!x || depth > 10) return;
+    if (Array.isArray(x)) {
+      if (x.length >= 40 && x.length <= 250 && typeof x[0] === "object") {
+        const sample = x.slice(0, 20).filter(Boolean);
+        const nameCount = sample.filter((p) => typeof (p?.player_name || p?.name || p?.full_name) === "string").length;
+        if (nameCount >= Math.max(8, Math.floor(sample.length * 0.6))) {
+          const hasLocked = sample.some((p) => "locked" in p || "on_track" in p || "onTrack" in p);
+          const hasExempt = sample.some((p) => "exemptions" in p || "exemption" in p || "exempt" in p);
+          const hasInField = sample.some((p) => "in_field" in p || "inField" in p || "projected" in p);
+          const key = `${path}:${x.length}:${hasLocked ? "L" : ""}${hasExempt ? "E" : ""}${hasInField ? "F" : ""}`;
+          candidates.push({ path, arr: x, len: x.length, hasLocked, hasExempt, hasInField, key });
+        }
+      }
+      for (let i = 0; i < Math.min(60, x.length); i += 1) walk(x[i], `${path}[${i}]`, depth + 1);
+      return;
+    }
+    if (typeof x !== "object") return;
+    if (seen.has(x)) return;
+    seen.add(x);
+    for (const [k, v] of Object.entries(x)) {
+      const nextPath = path ? `${path}.${k}` : k;
+      walk(v, nextPath, depth + 1);
+    }
+  };
+  walk(nextDataJson, "", 0);
+
+  if (!candidates.length) return null;
+
+  // Heuristic scoring: prefer arrays that look like the "Projected Field" table.
+  const score = (c) => {
+    const p = c.path.toLowerCase();
+    let s = 0;
+    if (p.includes("project")) s += 30;
+    if (p.includes("field")) s += 20;
+    if (p.includes("bubble")) s -= 25;
+    if (p.includes("eligible")) s -= 25;
+    if (p.includes("not_in_field") || p.includes("notinfield")) s -= 30;
+    if (c.hasLocked) s += 10;
+    if (c.hasExempt) s += 8;
+    if (c.hasInField) s += 8;
+    // Prefer realistic-ish sizes (masters smaller than US Open etc, but we don't know major here).
+    const sizePenalty = c.len > 180 ? 20 : c.len < 60 ? 15 : 0;
+    s -= sizePenalty;
+    return s;
+  };
+  candidates.sort((a, b) => score(b) - score(a));
+  return candidates[0].arr;
+}
+
 async function fetchDataGolfMajorFieldPlayers(tournament) {
   const major = majorParamFromTournamentName(tournament?.name || "");
   if (!major) return { players: [], provider: "DataGolf major-fields", urlsTried: [], error: "Not a supported major." };
@@ -716,16 +778,24 @@ async function fetchDataGolfMajorFieldPlayers(tournament) {
     if (nextDataMatch && nextDataMatch[1]) {
       try {
         const json = JSON.parse(nextDataMatch[1]);
-        playerObjs = extractPlayersFromAnyJson(json);
+        const projected = pickProjectedFieldArrayFromNextData(json);
+        if (Array.isArray(projected) && projected.length) {
+          playerObjs = projected;
+        } else {
+          playerObjs = extractPlayersFromAnyJson(json);
+        }
       } catch {}
     }
 
     // Try: JSON-ish patterns in page source.
     if (!playerObjs.length) {
       const matches = [];
+      // Try to limit to the Projected Field section if it's present in raw HTML.
+      const idx = html.toLowerCase().indexOf("projected field");
+      const window = idx >= 0 ? html.slice(idx, idx + 250000) : html;
       const re = /\"player_name\"\s*:\s*\"([^\"]+)\"/g;
       let m = null;
-      while ((m = re.exec(html))) {
+      while ((m = re.exec(window))) {
         if (m[1]) matches.push({ player_name: m[1] });
         if (matches.length > 2000) break;
       }
@@ -758,10 +828,24 @@ async function fetchDataGolfMajorFieldPlayers(tournament) {
       playerObjs = candidates;
     }
 
-    const rawPlayers = playerObjs
+    // Normalize + dedupe by name early.
+    const uniqueByName = new Map();
+    for (const p of playerObjs || []) {
+      const name = normalizePlayerName(p?.player_name || p?.full_name || p?.name || p?.player || p?.playerName || "");
+      if (!name) continue;
+      const k = normKey(name);
+      if (!k) continue;
+      if (!uniqueByName.has(k)) {
+        uniqueByName.set(k, {
+          id: Number(p?.dg_id ?? p?.dgid ?? p?.datagolf_id ?? p?.player_id ?? p?.id) || null,
+          name,
+        });
+      }
+    }
+    const rawPlayers = Array.from(uniqueByName.values())
       .map((p) => ({
-        id: Number(p.dg_id ?? p.dgid ?? p.datagolf_id ?? p.player_id ?? p.id) || null,
-        name: normalizePlayerName(p.player_name || p.full_name || p.name || p.player || p.playerName || ""),
+        id: Number(p.id) || null,
+        name: p.name,
       }))
       .filter((p) => p.id || p.name);
 
@@ -786,6 +870,17 @@ async function fetchDataGolfMajorFieldPlayers(tournament) {
         };
       })
       .filter((p) => p?.name);
+
+    // Sanity check: majors have well-known field sizes; reject obviously wrong scrapes.
+    const { min, max } = majorExpectedCountRange(major);
+    if (players.length < min || players.length > max) {
+      return {
+        players: [],
+        provider: "DataGolf major-fields (scrape)",
+        urlsTried: [url],
+        error: `Scrape extracted ${players.length} names, outside expected range ${min}-${max} for ${major}.`,
+      };
+    }
 
     const enriched = await enrichPlayersFromDataGolfRefs(players);
     return { players: enriched, provider: "DataGolf major-fields (scrape)", urlsTried: [url], error: null };
