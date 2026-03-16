@@ -872,6 +872,53 @@ async function importFieldPlayersIntoTournament(tournamentId, players) {
   return { imported: golferRows.length };
 }
 
+async function tournamentHasField(tournamentId) {
+  try {
+    const { count } = await supabase
+      .from("tournament_scores")
+      .select("*", { count: "exact", head: true })
+      .eq("tournament_id", tournamentId);
+    return Number(count || 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function autoSeedUpcomingFields() {
+  if (!DATAGOLF_API_KEY) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const cutoff = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10); // next 60 days
+
+  const { data: upcoming, error } = await supabase
+    .from("tournaments")
+    .select("id, name, start_date, field_size")
+    .gte("start_date", today)
+    .lte("start_date", cutoff)
+    .order("start_date", { ascending: true });
+  if (error || !Array.isArray(upcoming) || !upcoming.length) return;
+
+  for (const t of upcoming) {
+    // Skip if already has a field imported.
+    // Also skip provider-specific ids that aren't ours (just in case).
+    if (!t?.id || String(t.id).includes("::")) continue;
+    const has = await tournamentHasField(t.id);
+    if (has) continue;
+
+    try {
+      const dg = await fetchDataGolfFieldPlayers(t);
+      if (!dg.players?.length) continue;
+      const result = await importFieldPlayersIntoTournament(t.id, dg.players);
+      if (!result?.error && (result.imported || 0) > 0) {
+        console.log(`✅ Auto-seeded field: ${t.name} (${t.id}) – ${result.imported} players via DataGolf`);
+      }
+      // Gentle spacing between tournaments to avoid DataGolf burst suspensions.
+      await sleepMs(800);
+    } catch (e) {
+      console.warn(`Field auto-seed failed for ${t.id}:`, e?.message || e);
+    }
+  }
+}
+
 app.post("/api/admin/import-field/:tournamentId", async (req, res, next) => {
   try {
     const required = process.env.ADMIN_TOKEN;
@@ -1068,6 +1115,18 @@ cron.schedule("*/30 * * * * *", async () => {
     console.error("Score sync error:", e.message);
   }
 });
+
+// ─── Auto-seed tournament fields (DataGolf) ───────────────────
+// Runs periodically so upcoming tournaments get a draftable field without manual admin calls.
+cron.schedule("0 */6 * * *", async () => {
+  try {
+    await autoSeedUpcomingFields();
+  } catch (e) {
+    console.warn("Auto-seed fields job failed:", e?.message || e);
+  }
+});
+// Kick once shortly after boot so first deploy populates quickly.
+setTimeout(() => { autoSeedUpcomingFields().catch(()=>{}); }, 25_000);
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`🏌️  MyGolfPoolPro API running on port ${PORT}`));
