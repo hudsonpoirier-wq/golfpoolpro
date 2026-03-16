@@ -206,6 +206,9 @@ export const Pools = {
 
   /** Host-only: start the draft (server becomes source of truth for draft state) */
   startDraft: (poolId) => post(`/api/pools/${poolId}/start-draft`, {}),
+
+  /** Host-only: mark all pool members ready (commissioner/testing) */
+  readyAll: (poolId) => post(`/api/pools/${poolId}/ready-all`, {}),
 };
 
 

@@ -181,7 +181,8 @@ router.post("/:id/start-draft", requireAuth, async (req, res, next) => {
       .select("is_ready")
       .eq("pool_id", id);
     const memberCount = members?.length || 0;
-    if (memberCount < 2) return res.status(409).json({ error: "Need at least 2 participants to start the draft." });
+    // Allow solo drafts for testing / single-player pools.
+    if (memberCount < 1) return res.status(409).json({ error: "Need at least 1 participant to start the draft." });
     const allReady = members.every((m) => m.is_ready);
     if (!allReady) return res.status(409).json({ error: "All participants must be ready to start the draft." });
 
@@ -202,6 +203,46 @@ router.post("/:id/start-draft", requireAuth, async (req, res, next) => {
       .single();
     if (error) return res.status(400).json({ error: error.message });
     res.json({ pool: updated });
+  } catch (e) { next(e); }
+});
+
+// ─── POST /api/pools/:id/ready-all ────────────────────────────
+// Host-only: marks every member as ready (useful for commissioner controls/testing).
+router.post("/:id/ready-all", requireAuth, async (req, res, next) => {
+  try {
+    const sb = req.app.locals.supabase;
+    const { id } = req.params;
+
+    const { data: pool } = await sb
+      .from("pools")
+      .select("id, host_id, status")
+      .eq("id", id)
+      .single();
+    if (!pool) return res.status(404).json({ error: "Pool not found." });
+    if (String(pool.host_id) !== String(req.user.id)) {
+      return res.status(403).json({ error: "Only the host can mark everyone ready." });
+    }
+    if (pool.status !== "lobby") {
+      return res.status(409).json({ error: "You can only mark everyone ready in the lobby." });
+    }
+
+    const { error: updErr } = await sb
+      .from("pool_members")
+      .update({ is_ready: true })
+      .eq("pool_id", id);
+    if (updErr) return res.status(400).json({ error: updErr.message });
+
+    // Re-check readiness, then auto-advance (solo pools allowed).
+    const { data: members } = await sb
+      .from("pool_members")
+      .select("is_ready")
+      .eq("pool_id", id);
+    const allReady = (members?.length || 0) >= 1 && members.every((m) => m.is_ready);
+    if (allReady) {
+      await sb.from("pools").update({ status: "draft" }).eq("id", id);
+    }
+
+    res.json({ allReady: !!allReady });
   } catch (e) { next(e); }
 });
 
@@ -528,7 +569,8 @@ router.patch("/:id/ready", requireAuth, async (req, res, next) => {
       .from("pool_members")
       .select("is_ready")
       .eq("pool_id", id);
-    const allReady = members?.length >= 2 && members.every(m => m.is_ready);
+    // Allow solo pools for testing / single-player pools.
+    const allReady = members?.length >= 1 && members.every(m => m.is_ready);
     if (allReady) {
       await sb.from("pools").update({ status: "draft" }).eq("id", id);
     }

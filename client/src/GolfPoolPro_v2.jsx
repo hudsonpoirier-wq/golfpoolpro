@@ -2012,8 +2012,7 @@ export default function GolfPoolPro() {
     // Only the host should trigger a shared draft start; other clients will transition
     // when the backend pool status flips to "draft".
     if(allReady && poolPhase==="lobby" && view==="pool" && isHostOfActivePool){
-      // Shared drafts require at least 2 members on the server.
-      if (apiToken.get() && joinedParticipants.length < 2) return;
+      // Shared drafts allow solo pools for testing.
       const t = setTimeout(()=>{ startDraft(); }, 1500);
       return ()=>clearTimeout(t);
     }
@@ -2432,9 +2431,24 @@ export default function GolfPoolPro() {
                     {!allReady && isHostOfActivePool && (
                       <button className="btn btn-ghost btn-sm" style={{marginTop:8}} onClick={async ()=>{
                         if (apiToken.get() && activePool?.id) {
-                          notify("Each player must tap Ready from their own account.", "error");
+                          try {
+                            await Pools.readyAll(activePool.id);
+                            // Let the normal pool sync pick up ready + status changes quickly.
+                            try {
+                              const resp = await Pools.get(activePool.id);
+                              const members = resp?.members || [];
+                              setPoolReadyMap((prev) => ({
+                                ...prev,
+                                ...Object.fromEntries(members.map((m) => [m.user_id, !!m.is_ready])),
+                              }));
+                            } catch {}
+                            notify("Everyone marked ready.");
+                          } catch (e) {
+                            notify(e?.message || "Could not mark everyone ready.", "error");
+                          }
                           return;
                         }
+                        // Local/demo fallback
                         const allMap = {};
                         joinedParticipants.forEach(p=>{ allMap[p.id]=true; });
                         setPoolReadyMap(allMap);
