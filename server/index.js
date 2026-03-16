@@ -387,6 +387,171 @@ function sleepMs(ms) {
   return new Promise((r) => setTimeout(r, wait));
 }
 
+function dateDistanceDays(a, b) {
+  if (!a || !b) return 3650;
+  const da = new Date(a);
+  const db = new Date(b);
+  if (Number.isNaN(da.getTime()) || Number.isNaN(db.getTime())) return 3650;
+  return Math.abs(Math.round((da.getTime() - db.getTime()) / 86400000));
+}
+
+// ─── DataGolf (Scratch Plus) – upcoming tournament fields/tee times ─────────
+const DATAGOLF_API_KEY = process.env.DATAGOLF_API_KEY || "";
+const DATAGOLF_BASE_URL = (process.env.DATAGOLF_BASE_URL || "https://feeds.datagolf.com").replace(/\/+$/, "");
+const DATAGOLF_TOUR = (process.env.DATAGOLF_TOUR || "pga").toLowerCase();
+const DATAGOLF_CACHE_TTL_MS = Number(process.env.DATAGOLF_CACHE_TTL_MS || 10 * 60 * 1000); // 10m
+const DATAGOLF_RATE_LIMIT_PER_MIN = Number(process.env.DATAGOLF_RATE_LIMIT_PER_MIN || 45);
+const DATAGOLF_STATE = { minuteKey: null, minuteCount: 0, nextAllowedAtMs: 0 };
+const DATAGOLF_CACHE = new Map(); // url -> { ts, json }
+
+function datagolfMinuteKey() {
+  const now = new Date();
+  const y = now.getUTCFullYear();
+  const m = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(now.getUTCDate()).padStart(2, "0");
+  const hh = String(now.getUTCHours()).padStart(2, "0");
+  const mm = String(now.getUTCMinutes()).padStart(2, "0");
+  return `${y}-${m}-${d}T${hh}:${mm}`;
+}
+
+function datagolfResetWindowIfNeeded() {
+  const k = datagolfMinuteKey();
+  if (DATAGOLF_STATE.minuteKey !== k) {
+    DATAGOLF_STATE.minuteKey = k;
+    DATAGOLF_STATE.minuteCount = 0;
+  }
+}
+
+function datagolfCanCall() {
+  datagolfResetWindowIfNeeded();
+  if (DATAGOLF_STATE.minuteCount >= DATAGOLF_RATE_LIMIT_PER_MIN) return { ok: false, reason: "rate_limit" };
+  const now = Date.now();
+  if (now < DATAGOLF_STATE.nextAllowedAtMs) return { ok: false, reason: "spacing", retryAfterMs: DATAGOLF_STATE.nextAllowedAtMs - now };
+  return { ok: true };
+}
+
+function datagolfRegisterCall() {
+  datagolfResetWindowIfNeeded();
+  DATAGOLF_STATE.minuteCount += 1;
+  // ~40/min max to stay under 45/min.
+  DATAGOLF_STATE.nextAllowedAtMs = Date.now() + 1500;
+}
+
+async function datagolfFetchJson(url) {
+  const cached = DATAGOLF_CACHE.get(url);
+  if (cached && Date.now() - cached.ts < DATAGOLF_CACHE_TTL_MS) return cached.json;
+
+  const decision = datagolfCanCall();
+  if (!decision.ok) {
+    if (decision.reason === "spacing" && decision.retryAfterMs && decision.retryAfterMs < 2500) {
+      await sleepMs(decision.retryAfterMs);
+    } else {
+      throw new Error("DataGolf rate limit/spacing in effect.");
+    }
+  }
+  datagolfRegisterCall();
+  const resp = await fetch(url, { timeout: 12000 });
+  if (!resp.ok) throw new Error(`DataGolf returned ${resp.status}`);
+  const json = await resp.json();
+  DATAGOLF_CACHE.set(url, { ts: Date.now(), json });
+  return json;
+}
+
+function normKey(v) {
+  return String(v || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function pickBestDataGolfEvent(scheduleItems, tournament) {
+  const targetName = normKey(tournament?.name || "");
+  const targetDate = tournament?.start_date || "";
+  let best = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const ev of scheduleItems) {
+    const evName = normKey(ev.event_name || ev.name);
+    const namePenalty = (evName.includes(targetName) || targetName.includes(evName)) ? 0 : 25;
+    const datePenalty = dateDistanceDays(targetDate, ev.start_date || ev.startDate || ev.date);
+    const score = namePenalty + datePenalty;
+    if (score < bestScore) { bestScore = score; best = ev; }
+  }
+  return best;
+}
+
+async function fetchDataGolfFieldPlayers(tournament) {
+  if (!DATAGOLF_API_KEY) return { players: [], provider: null, urlsTried: [], error: "DATAGOLF_API_KEY not set." };
+
+  const year = String(tournament?.start_date || "").slice(0, 4) || String(new Date().getUTCFullYear());
+  const scheduleUrl = `${DATAGOLF_BASE_URL}/get-schedule?tour=${encodeURIComponent(DATAGOLF_TOUR)}&season=${encodeURIComponent(year)}&upcoming_only=no&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
+  const fieldUrl = `${DATAGOLF_BASE_URL}/field-updates?tour=${encodeURIComponent(DATAGOLF_TOUR)}&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
+  const fieldUpcomingUrl = `${DATAGOLF_BASE_URL}/field-updates?tour=${encodeURIComponent("upcoming_pga")}&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
+  const urlsTried = [scheduleUrl, fieldUrl, fieldUpcomingUrl];
+
+  let scheduleJson = null;
+  try {
+    scheduleJson = await datagolfFetchJson(scheduleUrl);
+  } catch (e) {
+    return { players: [], provider: "DataGolf", urlsTried, error: String(e?.message || e) };
+  }
+  const scheduleItems = []
+    .concat(scheduleJson?.schedule || [])
+    .concat(scheduleJson?.events || [])
+    .concat(scheduleJson?.data || [])
+    .concat(Array.isArray(scheduleJson) ? scheduleJson : [])
+    .filter((x) => x && typeof x === "object");
+  const bestEvent = pickBestDataGolfEvent(scheduleItems, tournament);
+  const bestEventId = bestEvent?.event_id ?? bestEvent?.eventId ?? null;
+  const targetName = normKey(tournament?.name || "");
+
+  const extractFromFieldPayload = (payload) => {
+    const list = []
+      .concat(payload?.field || [])
+      .concat(payload?.players || [])
+      .concat(payload?.entries || [])
+      .concat(payload?.data || []);
+    return (list || [])
+      .map((p) => ({
+        id: Number(p.dg_id || p.dgid || p.datagolf_id || p.player_id) || null,
+        name: normalizePlayerName(p.player_name || p.name || p.full_name || p.player || ""),
+        country: p.country || p.nationality || null,
+        world_rank: Number(p.owgr || p.owgr_rank || p.world_rank || p.rank) || null,
+      }))
+      .filter((p) => p.name);
+  };
+
+  const tryFieldUrl = async (url) => {
+    const json = await datagolfFetchJson(url);
+    const candidates = [];
+    if (Array.isArray(json)) candidates.push({ event_id: null, payload: { field: json } });
+    if (json && typeof json === "object") {
+      if (Array.isArray(json.events)) {
+        for (const ev of json.events) candidates.push({ event_id: ev?.event_id ?? ev?.eventId ?? null, payload: ev });
+      }
+      candidates.push({ event_id: json.event_id ?? json.eventId ?? null, payload: json });
+    }
+
+    const match =
+      (bestEventId ? candidates.find((c) => String(c.event_id) === String(bestEventId)) : null) ||
+      candidates.find((c) => normKey(c.payload?.event_name || c.payload?.eventName || c.payload?.name || "").includes(targetName));
+    const payload = match?.payload || json;
+    const players = extractFromFieldPayload(payload);
+    return { players, event_id: match?.event_id || bestEventId || null };
+  };
+
+  for (const url of [fieldUrl, fieldUpcomingUrl]) {
+    try {
+      const out = await tryFieldUrl(url);
+      if (out.players?.length) {
+        return { players: out.players, provider: "DataGolf", url, urlsTried, event_id: out.event_id || null };
+      }
+    } catch {}
+  }
+
+  return { players: [], provider: "DataGolf", urlsTried, error: "No matching field in DataGolf field-updates yet." };
+}
+
 async function fetchRapidApiFieldPlayers(tournament) {
   // Separate "RapidAPI GolfCourseAPI" (courses) from "RapidAPI SlashGolf" (tournaments/leaderboards/fields).
   // If you only set RAPIDAPI_KEY/HOST, those will still work as a fallback.
@@ -671,6 +836,7 @@ async function importFieldPlayersIntoTournament(tournamentId, players) {
     const k = name.toLowerCase();
     if (!uniqueByName.has(k)) {
       uniqueByName.set(k, {
+        id: Number(p.id || p.dg_id || p.dgid || p.player_id) || null,
         name,
         country: p.country || p.nationality || null,
         world_rank: Number(p.world_rank || p.rank) || null,
@@ -681,7 +847,7 @@ async function importFieldPlayersIntoTournament(tournamentId, players) {
   if (!normalizedPlayers.length) return { imported: 0 };
 
   const golferRows = normalizedPlayers.map((p) => ({
-    id: toStableGolferId(p.name),
+    id: Number.isFinite(Number(p.id)) && Number(p.id) > 0 ? Number(p.id) : toStableGolferId(p.name),
     name: p.name,
     country: p.country || null,
     world_rank: p.world_rank || null,
@@ -757,6 +923,16 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
     let source = "unknown";
     let importedEventId = null;
     const debug = [];
+
+    // 0) DataGolf first (best for upcoming fields)
+    if (!players.length) {
+      const dg = await fetchDataGolfFieldPlayers(tournament);
+      debug.push({ provider: dg.provider || "DataGolf", url: dg.url || null, urlsTried: dg.urlsTried || [], count: dg.players?.length || 0, error: dg.error || null, event_id: dg.event_id || null });
+      if (dg.players?.length) {
+        players = dg.players;
+        source = "DataGolf";
+      }
+    }
 
     // 1) Sportradar first (if configured)
     if (!players.length) {
