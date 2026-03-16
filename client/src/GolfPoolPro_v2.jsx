@@ -561,6 +561,22 @@ const parseInviteTokenFromLocation = () => {
   return null;
 };
 
+const clearInviteRouteFromLocation = () => {
+  if (typeof window === "undefined") return;
+  try {
+    const hasInvitePath = /^\/join\/[^/?#]+/i.test(window.location.pathname || "");
+    const hasInviteHash = /^#\/join\/[^/?#]+/i.test(window.location.hash || "");
+    if (hasInvitePath || hasInviteHash) {
+      // Ensure invite routing doesn't re-trigger after a successful join.
+      history.replaceState(null, "", "/");
+      return;
+    }
+    if (window.location.hash) {
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+  } catch {}
+};
+
 const parseRecoveryTokensFromLocation = () => {
   if (typeof window === "undefined") return null;
   const readParams = (raw) => {
@@ -666,6 +682,7 @@ export default function GolfPoolPro() {
   // Invite / auth state
   const [inviteView,setInviteView] = useState(false);
   const [invitePool,setInvitePool] = useState(null);
+  const [inviteJoinRequested,setInviteJoinRequested] = useState(false);
   const [authMode,setAuthMode] = useState("login"); // "login"|"signup"|"forgot"|"join"
   const [authEmail,setAuthEmail] = useState(()=> LS.get("mgpp_last_email","") || "");
   const [authPass,setAuthPass] = useState("");
@@ -1579,7 +1596,35 @@ export default function GolfPoolPro() {
     setAuthMode((apiToken.get() && (apiSession.get()?.id || currentUser)) ? "join" : "login");
     setAuthName(""); setAuthError(""); setAuthSuccess("");
     setForgotSent(false);
+    setInviteJoinRequested(false);
     setView("invite");
+  };
+
+  const handleInviteJoinCTA = () => {
+    if (!invitePool) return;
+    if (authBusy) return;
+    setAuthError("");
+    setAuthSuccess("");
+    setInviteJoinRequested(true);
+
+    // If not authenticated yet, prompt login and focus the email input.
+    if (!apiToken.get()) {
+      setAuthMode("login");
+      setInviteView(true);
+      setView("invite");
+      setTimeout(() => {
+        try { loginEmailRef.current?.focus?.(); } catch {}
+      }, 0);
+      return;
+    }
+
+    // Already authenticated: join immediately.
+    setAuthMode("join");
+    setInviteView(true);
+    setView("invite");
+    setTimeout(() => {
+      try { handleJoinInvitedPool(); } catch {}
+    }, 0);
   };
 
   const joinPool = (userId, pool) => {
@@ -1655,10 +1700,10 @@ export default function GolfPoolPro() {
       ensureParticipant({ id:user.id, name:user.name || email.split("@")[0], email:user.email || email, avatar:user.avatar || (user.name||"U").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase() });
       setAuthError("");
       if(invitePool){
-        setAuthSuccess(`Logged in as ${user.name || email}. Review the pool details, then tap Join Pool.`);
         setAuthMode("join");
         setInviteView(true);
         setView("invite");
+        setInviteJoinRequested(true);
       } else {
         notify(`Welcome back, ${(user.name || email).split(" ")[0]}!`);
         setView("home");
@@ -1694,10 +1739,10 @@ export default function GolfPoolPro() {
       ensureParticipant({ id:user.id, name:user.name || name, email:user.email || email, avatar:user.avatar || name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase() });
       setAuthError("");
       if(invitePool){
-        setAuthSuccess(`Account created. Review the pool details, then tap Join Pool.`);
         setAuthMode("join");
         setInviteView(true);
         setView("invite");
+        setInviteJoinRequested(true);
       } else {
         notify(`Welcome to GolfPoolPro, ${name.split(" ")[0]}!`);
         setView("home");
@@ -1858,7 +1903,8 @@ export default function GolfPoolPro() {
       setView("pool");
       setInviteView(false);
       setAuthSuccess("");
-      clearHash();
+      setInviteJoinRequested(false);
+      clearInviteRouteFromLocation();
       notify(`Joined ${mappedPool.name}!`);
     } catch (e) {
       const msg = String(e?.message || "");
@@ -1868,11 +1914,23 @@ export default function GolfPoolPro() {
         setAuthError("Your session expired. Please log in again, then join the pool.");
       } else {
         setAuthError(msg || "Could not join this pool right now. Please try again.");
+        setInviteJoinRequested(false);
       }
     } finally {
       setAuthBusy(false);
     }
   };
+
+  // If a user initiated join from an invite but had to authenticate first,
+  // automatically complete the join as soon as auth is available.
+  useEffect(() => {
+    if (!inviteJoinRequested) return;
+    if (!invitePool) return;
+    if (authBusy) return;
+    if (!apiToken.get()) return;
+    handleJoinInvitedPool();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inviteJoinRequested, invitePool, authBusy]);
 
   // Stats helpers
   const getPlayerRounds = (gId) => {
@@ -3628,6 +3686,25 @@ export default function GolfPoolPro() {
                   <p style={{fontSize:14,color:"var(--muted)"}}>Sign in or create an account to join golf pools</p>
                 )}
               </div>
+
+              {invitePool && (
+                <div style={{marginTop:-10,marginBottom:18}}>
+                  <button
+                    type="button"
+                    className="btn btn-prim"
+                    style={{width:"100%",justifyContent:"center",fontSize:15,padding:"13px"}}
+                    onClick={handleInviteJoinCTA}
+                    disabled={authBusy}
+                  >
+                    {apiToken.get() ? (authBusy ? "Joining..." : "Join Pool") : "Join Pool"}
+                  </button>
+                  <p style={{marginTop:10,fontSize:12,color:"var(--muted)",textAlign:"center"}}>
+                    {apiToken.get()
+                      ? "You’ll be taken straight into the lobby."
+                      : "Log in or create an account, then you’ll be taken straight into the lobby."}
+                  </p>
+                </div>
+              )}
 
               {(authMode==="login" || authMode==="signup") && (
                 <div className="auth-tabs">
