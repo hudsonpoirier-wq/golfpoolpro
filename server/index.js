@@ -152,9 +152,15 @@ app.get("/api/admin/tournaments/suggest-map", async (req, res, next) => {
 });
 
 function normalizePlayerName(name) {
-  return String(name || "")
+  const s = String(name || "")
     .replace(/\s+/g, " ")
     .trim();
+  // Common feed format: "Last, First" -> "First Last"
+  if (s.includes(",")) {
+    const [last, rest] = s.split(",", 2).map((x) => String(x || "").trim());
+    if (last && rest) return `${rest} ${last}`.replace(/\s+/g, " ").trim();
+  }
+  return s;
 }
 
 function toStableGolferId(name) {
@@ -483,73 +489,113 @@ function pickBestDataGolfEvent(scheduleItems, tournament) {
 async function fetchDataGolfFieldPlayers(tournament) {
   if (!DATAGOLF_API_KEY) return { players: [], provider: null, urlsTried: [], error: "DATAGOLF_API_KEY not set." };
 
-  const year = String(tournament?.start_date || "").slice(0, 4) || String(new Date().getUTCFullYear());
-  const scheduleUrl = `${DATAGOLF_BASE_URL}/get-schedule?tour=${encodeURIComponent(DATAGOLF_TOUR)}&season=${encodeURIComponent(year)}&upcoming_only=no&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
-  const fieldUrl = `${DATAGOLF_BASE_URL}/field-updates?tour=${encodeURIComponent(DATAGOLF_TOUR)}&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
-  const fieldUpcomingUrl = `${DATAGOLF_BASE_URL}/field-updates?tour=${encodeURIComponent("upcoming_pga")}&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
-  const urlsTried = [scheduleUrl, fieldUrl, fieldUpcomingUrl];
-
-  let scheduleJson = null;
-  try {
-    scheduleJson = await datagolfFetchJson(scheduleUrl);
-  } catch (e) {
-    return { players: [], provider: "DataGolf", urlsTried, error: String(e?.message || e) };
-  }
-  const scheduleItems = []
-    .concat(scheduleJson?.schedule || [])
-    .concat(scheduleJson?.events || [])
-    .concat(scheduleJson?.data || [])
-    .concat(Array.isArray(scheduleJson) ? scheduleJson : [])
-    .filter((x) => x && typeof x === "object");
-  const bestEvent = pickBestDataGolfEvent(scheduleItems, tournament);
-  const bestEventId = bestEvent?.event_id ?? bestEvent?.eventId ?? null;
   const targetName = normKey(tournament?.name || "");
+  const targetDate = tournament?.start_date || "";
 
-  const extractFromFieldPayload = (payload) => {
-    const list = []
-      .concat(payload?.field || [])
-      .concat(payload?.players || [])
-      .concat(payload?.entries || [])
-      .concat(payload?.data || []);
-    return (list || [])
-      .map((p) => ({
-        id: Number(p.dg_id || p.dgid || p.datagolf_id || p.player_id) || null,
-        name: normalizePlayerName(p.player_name || p.name || p.full_name || p.player || ""),
-        country: p.country || p.nationality || null,
-        world_rank: Number(p.owgr || p.owgr_rank || p.world_rank || p.rank) || null,
-      }))
-      .filter((p) => p.name);
+  const toursToTry = Array.from(new Set([
+    DATAGOLF_TOUR,
+    "upcoming_pga",
+    "pga",
+    "opp",
+    "euro",
+    "kft",
+    "alt",
+    "all", // undocumented, but harmless to try if supported
+  ].map((t) => String(t || "").toLowerCase()).filter(Boolean)));
+
+  const urlsTried = [];
+
+  const coercePlayers = (arr) => (arr || [])
+    .map((p) => ({
+      id: Number(p.dg_id || p.dgid || p.datagolf_id || p.player_id) || null,
+      name: normalizePlayerName(p.player_name || p.name || p.full_name || p.player || ""),
+      country: p.country || p.nationality || null,
+      world_rank: Number(p.owgr || p.owgr_rank || p.world_rank || p.rank) || null,
+    }))
+    .filter((p) => p.name);
+
+  const findBestPlayerArray = (node) => {
+    let best = [];
+    const seen = new Set();
+    const walk = (x, depth) => {
+      if (!x || depth > 6) return;
+      if (Array.isArray(x)) {
+        // Candidate player list if objects look like players.
+        if (x.length && typeof x[0] === "object") {
+          const sample = x.slice(0, 10);
+          const looksLikePlayers = sample.some((p) => p && typeof p === "object" && (p.player_name || p.full_name || p.name || p.player));
+          if (looksLikePlayers && x.length > best.length) best = x;
+        }
+        for (const el of x.slice(0, 30)) walk(el, depth + 1);
+        return;
+      }
+      if (typeof x !== "object") return;
+      if (seen.has(x)) return;
+      seen.add(x);
+      for (const v of Object.values(x)) walk(v, depth + 1);
+    };
+    walk(node, 0);
+    return best;
   };
 
-  const tryFieldUrl = async (url) => {
-    const json = await datagolfFetchJson(url);
+  const getEventName = (ev) => normKey(ev?.event_name || ev?.eventName || ev?.name || ev?.tournament_name || ev?.tournament || "");
+  const getEventDate = (ev) => ev?.start_date || ev?.startDate || ev?.event_start_date || ev?.date || ev?.start || "";
+
+  const pickBestEventFromPayload = (json) => {
     const candidates = [];
-    if (Array.isArray(json)) candidates.push({ event_id: null, payload: { field: json } });
+    if (Array.isArray(json)) candidates.push(...json);
     if (json && typeof json === "object") {
-      if (Array.isArray(json.events)) {
-        for (const ev of json.events) candidates.push({ event_id: ev?.event_id ?? ev?.eventId ?? null, payload: ev });
+      for (const key of ["events", "tournaments", "schedule", "data", "results"]) {
+        if (Array.isArray(json[key])) candidates.push(...json[key]);
       }
-      candidates.push({ event_id: json.event_id ?? json.eventId ?? null, payload: json });
+      // Some feeds are a single event object.
+      candidates.push(json);
     }
 
-    const match =
-      (bestEventId ? candidates.find((c) => String(c.event_id) === String(bestEventId)) : null) ||
-      candidates.find((c) => normKey(c.payload?.event_name || c.payload?.eventName || c.payload?.name || "").includes(targetName));
-    const payload = match?.payload || json;
-    const players = extractFromFieldPayload(payload);
-    return { players, event_id: match?.event_id || bestEventId || null };
+    let best = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+    let bestPlayers = [];
+    for (const ev of candidates.filter((x) => x && typeof x === "object")) {
+      const evName = getEventName(ev);
+      if (!evName) continue;
+      const namePenalty = (evName.includes(targetName) || targetName.includes(evName)) ? 0 : 40;
+      const datePenalty = dateDistanceDays(targetDate, getEventDate(ev));
+
+      // Extract player list from common keys first, then fallback to a recursive search.
+      const rawList =
+        (Array.isArray(ev.field) && ev.field) ||
+        (Array.isArray(ev.players) && ev.players) ||
+        (Array.isArray(ev.entries) && ev.entries) ||
+        (Array.isArray(ev.data) && ev.data) ||
+        findBestPlayerArray(ev);
+      const players = coercePlayers(rawList);
+      if (!players.length) continue;
+
+      // Prefer "real" field sizes.
+      const sizePenalty = players.length < 50 ? 25 : 0;
+      const score = namePenalty + datePenalty + sizePenalty;
+      if (score < bestScore) {
+        bestScore = score;
+        best = ev;
+        bestPlayers = players;
+      }
+    }
+    return { best, players: bestPlayers };
   };
 
-  for (const url of [fieldUrl, fieldUpcomingUrl]) {
+  for (const tour of toursToTry) {
+    const url = `${DATAGOLF_BASE_URL}/field-updates?tour=${encodeURIComponent(tour)}&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
+    urlsTried.push(url);
     try {
-      const out = await tryFieldUrl(url);
+      const json = await datagolfFetchJson(url);
+      const out = pickBestEventFromPayload(json);
       if (out.players?.length) {
-        return { players: out.players, provider: "DataGolf", url, urlsTried, event_id: out.event_id || null };
+        return { players: out.players, provider: "DataGolf", url, urlsTried };
       }
     } catch {}
   }
 
-  return { players: [], provider: "DataGolf", urlsTried, error: "No matching field in DataGolf field-updates yet." };
+  return { players: [], provider: "DataGolf", urlsTried, error: "No matching projected field found in DataGolf field-updates yet." };
 }
 
 async function fetchRapidApiFieldPlayers(tournament) {

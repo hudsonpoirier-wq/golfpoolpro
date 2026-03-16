@@ -6,6 +6,30 @@ const { requireAuth } = require("../middleware/auth");
 
 // In-memory controls (MVP): not persisted across restarts.
 const pausedDraftPools = new Set(); // poolId -> paused boolean
+const draftClocks = new Map(); // poolId -> { pickNum, startedAtMs, pausedRemainingSec }
+
+function ensureDraftClock(poolId, pickNum, shotClock, lastPickAtMs) {
+  const key = String(poolId);
+  const existing = draftClocks.get(key);
+  if (!existing || existing.pickNum !== pickNum) {
+    // Start the current pick clock at the time the previous pick was made (or now for pick 0).
+    const startedAtMs = Number.isFinite(Number(lastPickAtMs)) ? Number(lastPickAtMs) : Date.now();
+    const next = { pickNum, startedAtMs, pausedRemainingSec: null };
+    draftClocks.set(key, next);
+    return next;
+  }
+  // Ensure pausedRemainingSec is within bounds if shotClock changed.
+  if (existing.pausedRemainingSec != null) {
+    const capped = Math.max(0, Math.min(Number(existing.pausedRemainingSec), Number(shotClock || 0)));
+    if (capped !== existing.pausedRemainingSec) existing.pausedRemainingSec = capped;
+  }
+  return existing;
+}
+
+function computeTimeRemaining(clock, shotClock) {
+  const elapsed = (Date.now() - clock.startedAtMs) / 1000;
+  return Math.max(0, Number(shotClock || 0) - elapsed);
+}
 
 // ─── GET /api/draft/:poolId ───────────────────────────────────
 // Returns full draft state: picks, current turn, time remaining
@@ -52,12 +76,22 @@ router.get("/:poolId", requireAuth, async (req, res, next) => {
     const nextPickOwners = isDone ? [] : draftOrder.slice(pickNum, pickNum + 5);
     const paused = pausedDraftPools.has(poolId);
 
-    // Time remaining on current pick (server-side clock)
-    const lastPickTime = picks?.length
-      ? new Date(picks[picks.length - 1].picked_at)
-      : new Date();
-    const elapsed = (Date.now() - lastPickTime.getTime()) / 1000;
-    const timeRemaining = paused ? pool.shot_clock : Math.max(0, pool.shot_clock - elapsed);
+    // Time remaining on current pick (server-side clock).
+    // Important: when pickNum==0, we must not reset the clock on every poll.
+    const lastPickAtMs = picks?.length ? new Date(picks[picks.length - 1].picked_at).getTime() : null;
+    const clock = ensureDraftClock(poolId, pickNum, pool.shot_clock, lastPickAtMs);
+    let timeRemaining = computeTimeRemaining(clock, pool.shot_clock);
+    if (paused) {
+      if (clock.pausedRemainingSec == null) clock.pausedRemainingSec = Math.round(timeRemaining);
+      timeRemaining = Number(clock.pausedRemainingSec);
+    } else if (clock.pausedRemainingSec != null) {
+      // If the draft was resumed without hitting the resume endpoint (e.g., server restart),
+      // restart the clock using the previously frozen remaining time.
+      const remain = Number(clock.pausedRemainingSec);
+      clock.startedAtMs = Date.now() - (Number(pool.shot_clock || 0) - remain) * 1000;
+      clock.pausedRemainingSec = null;
+      timeRemaining = computeTimeRemaining(clock, pool.shot_clock);
+    }
 
     // Auto-skip if clock has expired
     if (!paused && !isDone && timeRemaining <= 0 && currentPickOwner) {
@@ -87,9 +121,27 @@ router.post("/:poolId/pause", requireAuth, async (req, res, next) => {
   try {
     const sb = req.app.locals.supabase;
     const { poolId } = req.params;
-    const { data: pool } = await sb.from("pools").select("host_id").eq("id", poolId).single();
+    const { data: pool } = await sb.from("pools").select("host_id, shot_clock, team_size").eq("id", poolId).single();
     if (!pool) return res.status(404).json({ error: "Pool not found." });
     if (String(pool.host_id) !== String(req.user.id)) return res.status(403).json({ error: "Only the host can pause the draft." });
+    // Freeze the current pick time remaining.
+    try {
+      const { data: members } = await sb
+        .from("pool_members")
+        .select("user_id, joined_at")
+        .eq("pool_id", poolId)
+        .order("joined_at");
+      const { data: picks } = await sb
+        .from("draft_picks")
+        .select("picked_at")
+        .eq("pool_id", poolId)
+        .order("pick_number");
+      const pickNum = picks?.length || 0;
+      const lastPickAtMs = picks?.length ? new Date(picks[picks.length - 1].picked_at).getTime() : null;
+      const clock = ensureDraftClock(poolId, pickNum, pool.shot_clock, lastPickAtMs);
+      const remaining = computeTimeRemaining(clock, pool.shot_clock);
+      clock.pausedRemainingSec = Math.round(remaining);
+    } catch {}
     pausedDraftPools.add(poolId);
     res.json({ paused: true });
   } catch (e) { next(e); }
@@ -100,10 +152,26 @@ router.post("/:poolId/resume", requireAuth, async (req, res, next) => {
   try {
     const sb = req.app.locals.supabase;
     const { poolId } = req.params;
-    const { data: pool } = await sb.from("pools").select("host_id").eq("id", poolId).single();
+    const { data: pool } = await sb.from("pools").select("host_id, shot_clock").eq("id", poolId).single();
     if (!pool) return res.status(404).json({ error: "Pool not found." });
     if (String(pool.host_id) !== String(req.user.id)) return res.status(403).json({ error: "Only the host can resume the draft." });
     pausedDraftPools.delete(poolId);
+    // Continue clock from the frozen remaining time.
+    try {
+      const { data: picks } = await sb
+        .from("draft_picks")
+        .select("picked_at")
+        .eq("pool_id", poolId)
+        .order("pick_number");
+      const pickNum = picks?.length || 0;
+      const lastPickAtMs = picks?.length ? new Date(picks[picks.length - 1].picked_at).getTime() : null;
+      const clock = ensureDraftClock(poolId, pickNum, pool.shot_clock, lastPickAtMs);
+      const remain = clock.pausedRemainingSec;
+      if (remain != null) {
+        clock.startedAtMs = Date.now() - (Number(pool.shot_clock || 0) - Number(remain)) * 1000;
+        clock.pausedRemainingSec = null;
+      }
+    } catch {}
     res.json({ paused: false });
   } catch (e) { next(e); }
 });
@@ -160,6 +228,14 @@ router.post("/:poolId/pick", requireAuth, async (req, res, next) => {
       .select()
       .single();
     if (error) return res.status(400).json({ error: error.message });
+
+    // Start the next pick timer now.
+    try {
+      const nextPickNum = picks.length + 1;
+      const clock = ensureDraftClock(poolId, nextPickNum, pool.shot_clock, Date.now());
+      clock.startedAtMs = Date.now();
+      clock.pausedRemainingSec = null;
+    } catch {}
 
     // If draft is complete, advance pool to live
     if (picks.length + 1 >= totalPicks) {
@@ -218,6 +294,16 @@ router.post("/:poolId/force-pick", requireAuth, async (req, res, next) => {
       .single();
     if (error) return res.status(400).json({ error: error.message });
 
+    // Start the next pick timer now.
+    try {
+      const { data: poolClock } = await sb.from("pools").select("shot_clock").eq("id", poolId).single();
+      const sc = poolClock?.shot_clock ?? 60;
+      const nextPickNum = picks.length + 1;
+      const clock = ensureDraftClock(poolId, nextPickNum, sc, Date.now());
+      clock.startedAtMs = Date.now();
+      clock.pausedRemainingSec = null;
+    } catch {}
+
     if (picks.length + 1 >= totalPicks) {
       await sb.from("pools").update({ status: "live" }).eq("id", poolId);
     }
@@ -255,6 +341,15 @@ async function autoSkip(sb, poolId, userId, pool, picks, draftOrder) {
     golfer_id: nextGolfer.id,
     pick_number: picks.length,
   });
+
+  // Start the next pick timer now.
+  try {
+    const nextPickNum = picks.length + 1;
+    const sc = pool?.shot_clock ?? 60;
+    const clock = ensureDraftClock(poolId, nextPickNum, sc, Date.now());
+    clock.startedAtMs = Date.now();
+    clock.pausedRemainingSec = null;
+  } catch {}
 
   if (picks.length + 1 >= draftOrder.length) {
     await sb.from("pools").update({ status: "live" }).eq("id", poolId);

@@ -1292,8 +1292,17 @@ export default function GolfPoolPro() {
         setDraftPaused(!!state?.paused);
         if (typeof state?.timeRemaining === "number") {
           setServerTimeRemaining(state.timeRemaining);
-          // Keep a smooth UI countdown between polls without triggering auto-picks.
-          setTimer(state.timeRemaining);
+          // Keep a smooth UI countdown between polls without constantly resetting the UI to 60.
+          // Only snap when server indicates a new turn/reset or a large drift.
+          setTimer((prev) => {
+            const srv = state.timeRemaining;
+            if (typeof prev !== "number") return srv;
+            // If server time increases, it's a new pick/reset: snap to server.
+            if (srv > prev) return srv;
+            // If we're off by more than ~2s, snap back.
+            if ((prev - srv) > 2) return srv;
+            return prev;
+          });
         }
       } catch {}
     };
