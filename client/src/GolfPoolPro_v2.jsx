@@ -602,6 +602,14 @@ const fmtScore = (s) => {
   return <span className="over">+{s}</span>;
 };
 
+const sumRounds = (ls) => {
+  if (!ls) return null;
+  const rounds = [ls.R1, ls.R2, ls.R3, ls.R4];
+  const hasAny = rounds.some((v) => typeof v === "number");
+  if (!hasAny) return null;
+  return rounds.reduce((sum, v) => sum + (typeof v === "number" ? v : 0), 0);
+};
+
 const Avatar = ({init,size=32,color="#1B4332"}) => (
   <div style={{width:size,height:size,borderRadius:"50%",background:color,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:size*.35,fontWeight:700,flexShrink:0,letterSpacing:"0.5px"}}>
     {init}
@@ -910,6 +918,8 @@ export default function GolfPoolPro() {
           id: t.id,
           name: t.name,
           venue: t.venue || "TBD",
+          start_date: t.start_date || t.startDate || null,
+          end_date: t.end_date || t.endDate || null,
           date: fmtTDate(t.start_date || t.startDate),
           purse: t.purse ? `$${Number(t.purse).toLocaleString()}` : "TBD",
           field: Number(t.field_size || t.field) || null
@@ -1096,7 +1106,16 @@ export default function GolfPoolPro() {
       try {
         const resp = await Pools.list();
         if (cancelled) return;
+        const nowMs = Date.now();
         const mapped = (resp?.pools || []).map((p) => ({
+          // Hide scores until the tournament actually starts.
+          _tournamentStarted: (() => {
+            const iso = p.tournament?.start_date;
+            if (!iso) return false;
+            const d = new Date(iso);
+            if (Number.isNaN(d.getTime())) return false;
+            return nowMs >= d.getTime();
+          })(),
           id: p.id,
           name: p.name,
           status: p.status || "lobby",
@@ -1112,7 +1131,15 @@ export default function GolfPoolPro() {
           invite_token: p.invite_token || null,
           hostId: p.host_id || null,
           yourRank: p.yourRank ?? null,
-          yourScore: p.yourScore ?? null,
+          yourScore: (() => {
+            const iso = p.tournament?.start_date;
+            if (!iso) return null;
+            const d = new Date(iso);
+            if (Number.isNaN(d.getTime())) return null;
+            // If event hasn't started, keep score blank even if standings view returns 0.
+            if (nowMs < d.getTime()) return null;
+            return p.yourScore ?? null;
+          })(),
           created: p.created_at ? new Date(p.created_at).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"}),
         }));
         setPools(mapped);
@@ -1298,19 +1325,32 @@ export default function GolfPoolPro() {
   const poolConfig = activePool || config;
   const golferCatalog = apiGolfers.length ? apiGolfers : (USE_MOCK_FIELD ? FULL_FIELD : []);
   const getTournamentById = (id) => tournaments.find(x=>x.id===id);
+  const parseIsoDate = (iso) => {
+    if (!iso) return null;
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
+  const hasTournamentStarted = (id) => {
+    const t = getTournamentById(id);
+    const start = parseIsoDate(t?.start_date);
+    if (!start) return false;
+    return Date.now() >= start.getTime();
+  };
   const getTournamentFieldSize = (id) => {
     const t = getTournamentById(id);
+    // Prefer the actual available golfer list when we have it, so the UI matches the draft room.
+    if (id && id === selectedTournamentId && apiGolfers.length) return apiGolfers.length;
     const field = Number(t?.field);
     if (Number.isFinite(field) && field > 0) return field;
-    if (id && id === selectedTournamentId && apiGolfers.length) return apiGolfers.length;
     return 156;
   };
   const poolTournamentField = (() => {
     const tournamentId = poolConfig.tournamentId||poolConfig.tournament;
-    const t = getTournamentById(tournamentId);
-    if(!t) return golferCatalog;
     const fieldLimit = Math.min(getTournamentFieldSize(tournamentId), golferCatalog.length);
-    return golferCatalog.filter(p=>p.rank<=fieldLimit);
+    // Don't assume rank is contiguous (1..N). Always take the best N by rank.
+    return [...golferCatalog]
+      .sort((a,b)=>Number(a.rank||9999)-Number(b.rank||9999))
+      .slice(0, fieldLimit);
   })();
   const findGolferById = (id) => poolTournamentField.find(x=>x.id===id) || apiGolfers.find(x=>x.id===id);
 
@@ -1525,12 +1565,21 @@ export default function GolfPoolPro() {
   const getTeamScore = (pId, sg=liveScores, picks=activePicks, field=poolTournamentField) => {
     const team = getTeam(pId, picks, field);
     const sc = activePool?.scoringGolfers || config.scoringGolfers;
+    // Don't show placeholder scores before the tournament starts.
+    const tournamentId = activePool?.tournamentId || config.tournamentId || "";
+    if (tournamentId && !hasTournamentStarted(tournamentId)) return null;
+
     const scores = team.map(g=>{
       const ls = sg.find(l=>l.gId===g.id);
-      if(!ls) return 0;
-      return [ls.R1,ls.R2,ls.R3,ls.R4].reduce((sum,v)=>sum+(typeof v==="number"?v:0),0);
+      if(!ls) return null;
+      const rounds = [ls.R1,ls.R2,ls.R3,ls.R4];
+      const hasAny = rounds.some(v => typeof v === "number");
+      if (!hasAny) return null;
+      return rounds.reduce((sum,v)=>sum+(typeof v==="number"?v:0),0);
     }).sort((a,b)=>a-b);
-    return scores.slice(0,sc).reduce((s,v)=>s+v,0);
+    const real = scores.filter(v => typeof v === "number");
+    if (!real.length) return null;
+    return real.slice(0,sc).reduce((s,v)=>s+v,0);
   };
 
   const standings = joinedParticipants.map(p=>({
@@ -2178,20 +2227,28 @@ export default function GolfPoolPro() {
               <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",marginBottom:24}}>
                 <button className="btn btn-prim" onClick={()=>setView("admin")}>+ New Pool</button>
               </div>
-              <div className="g3" style={{marginBottom:40}}>
-                {pools.map(pool=>{
-                  const t = tournaments.find(x=>x.id===pool.tournamentId);
-                  return (
-                    <div key={pool.id} className={`pool-card ${pool.status}`} onClick={()=>openPool(pool)}>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
-                        <h3 className="h4">{pool.name}</h3>
-                        <span className={`badge ${pool.status==="live"?"bg-red":pool.status==="lobby"?"bg-gold":pool.status==="complete"?"bg-gray":"bg-forest"}`}>
-                          {pool.status==="live"&&<span className="live-dot"/>}
-                          {pool.status.charAt(0).toUpperCase()+pool.status.slice(1)}
-                        </span>
-                      </div>
-                      <p style={{fontSize:13,fontWeight:600,color:"var(--forest)",marginBottom:4}}>{t?.name||"—"}</p>
-                      <p style={{fontSize:12,color:"var(--muted)",marginBottom:16}}>{t?.venue} · {t?.date}</p>
+	              <div className="g3" style={{marginBottom:40}}>
+	                {pools.map(pool=>{
+	                  const t = tournaments.find(x=>x.id===pool.tournamentId);
+	                  const started = (() => {
+	                    const iso = t?.start_date;
+	                    if (!iso) return false;
+	                    const d = new Date(iso);
+	                    if (Number.isNaN(d.getTime())) return false;
+	                    return Date.now() >= d.getTime();
+	                  })();
+	                  const displayStatus = (pool.status === "live" && !started) ? "drafted" : pool.status;
+	                  return (
+	                    <div key={pool.id} className={`pool-card ${pool.status}`} onClick={()=>openPool(pool)}>
+	                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+	                        <h3 className="h4">{pool.name}</h3>
+	                        <span className={`badge ${displayStatus==="live"?"bg-red":displayStatus==="lobby"?"bg-gold":displayStatus==="complete"?"bg-gray":"bg-forest"}`}>
+	                          {displayStatus==="live"&&<span className="live-dot"/>}
+	                          {displayStatus==="drafted" ? "Drafted" : (displayStatus.charAt(0).toUpperCase()+displayStatus.slice(1))}
+	                        </span>
+	                      </div>
+	                      <p style={{fontSize:13,fontWeight:600,color:"var(--forest)",marginBottom:4}}>{t?.name||"—"}</p>
+	                      <p style={{fontSize:12,color:"var(--muted)",marginBottom:16}}>{t?.venue} · {t?.date}</p>
                       <div style={{display:"flex",gap:10,marginBottom:14}}>
                         {[
                           [pool.participants+"/"+pool.maxParticipants,"Players"],
@@ -2255,24 +2312,51 @@ export default function GolfPoolPro() {
         {view==="pool" && activePool && (
           <div>
             {/* Pool header bar */}
-            <div style={{background:"var(--forest)",padding:"16px 28px",display:"flex",alignItems:"center",gap:16}}>
-              <button className="btn btn-sm" style={{background:"rgba(255,255,255,.1)",color:"#fff",border:"1px solid rgba(255,255,255,.2)"}} onClick={()=>{setView("home");setActivePool(null);setConfirmDelete(false);}}>← Back</button>
-              <div style={{flex:1}}>
-                <div style={{display:"flex",alignItems:"center",gap:10}}>
-                  <span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:20,fontWeight:700,color:"#fff"}}>{activePool.name}</span>
-                  <span className={`badge ${activePool.status==="live"?"bg-red":activePool.status==="lobby"?"bg-gold":"bg-gray"}`}>
-                    {activePool.status==="live"&&<span className="live-dot"/>}
-                    {poolPhase==="draft"?"Drafting":activePool.status.charAt(0).toUpperCase()+activePool.status.slice(1)}
-                  </span>
-                </div>
-                <p style={{fontSize:12,color:"rgba(255,255,255,.6)",marginTop:2}}>{tournaments.find(t=>t.id===activePool.tournamentId)?.name}</p>
-              </div>
-              {(activePool.status==="live"||poolPhase==="live") && (
-                <div className="update-bar" style={{background:"rgba(255,255,255,.1)",color:"rgba(255,255,255,.7)",margin:0}}>
-                  <div className="pulse-dot"/>
-                  <span>Live · updates in {Math.floor(countdown/60)}:{String(countdown%60).padStart(2,"0")} · {lastUpdated.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</span>
-                </div>
-              )}
+	            <div style={{background:"var(--forest)",padding:"16px 28px",display:"flex",alignItems:"center",gap:16}}>
+	              <button className="btn btn-sm" style={{background:"rgba(255,255,255,.1)",color:"#fff",border:"1px solid rgba(255,255,255,.2)"}} onClick={()=>{setView("home");setActivePool(null);setConfirmDelete(false);}}>← Back</button>
+	              <div style={{flex:1}}>
+	                <div style={{display:"flex",alignItems:"center",gap:10}}>
+	                  <span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:20,fontWeight:700,color:"#fff"}}>{activePool.name}</span>
+	                  {(() => {
+	                    const t = tournaments.find((x)=>x.id===activePool.tournamentId);
+	                    const iso = t?.start_date;
+	                    const started = (() => {
+	                      if (!iso) return false;
+	                      const d = new Date(iso);
+	                      if (Number.isNaN(d.getTime())) return false;
+	                      return Date.now() >= d.getTime();
+	                    })();
+	                    const displayStatus = (activePool.status === "live" && !started) ? "drafted" : activePool.status;
+	                    const showLabel = poolPhase==="draft" ? "Drafting" : (displayStatus==="drafted" ? "Drafted" : (displayStatus.charAt(0).toUpperCase()+displayStatus.slice(1)));
+	                    const cls = displayStatus==="live" ? "bg-red" : displayStatus==="lobby" ? "bg-gold" : displayStatus==="drafted" ? "bg-forest" : "bg-gray";
+	                    return (
+	                      <span className={`badge ${cls}`}>
+	                        {displayStatus==="live"&&<span className="live-dot"/>}
+	                        {showLabel}
+	                      </span>
+	                    );
+	                  })()}
+	                </div>
+	                <p style={{fontSize:12,color:"rgba(255,255,255,.6)",marginTop:2}}>{tournaments.find(t=>t.id===activePool.tournamentId)?.name}</p>
+	              </div>
+	              {(() => {
+	                const t = tournaments.find((x)=>x.id===activePool.tournamentId);
+	                const iso = t?.start_date;
+	                const started = (() => {
+	                  if (!iso) return false;
+	                  const d = new Date(iso);
+	                  if (Number.isNaN(d.getTime())) return false;
+	                  return Date.now() >= d.getTime();
+	                })();
+	                if (!started) return null;
+	                if (!(activePool.status==="live"||poolPhase==="live")) return null;
+	                return (
+	                <div className="update-bar" style={{background:"rgba(255,255,255,.1)",color:"rgba(255,255,255,.7)",margin:0}}>
+	                  <div className="pulse-dot"/>
+	                  <span>Live · updates in {Math.floor(countdown/60)}:{String(countdown%60).padStart(2,"0")} · {lastUpdated.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</span>
+	                </div>
+	                );
+	              })()}
               {/* Delete button — host only */}
               {isHostOfActivePool && (
                 confirmDelete ? (
@@ -2493,13 +2577,13 @@ export default function GolfPoolPro() {
                   <div>
                     <h3 className="h3" style={{marginBottom:14}}>Pool Settings</h3>
                     <div className="card" style={{marginBottom:16}}>
-                      {[
-                        {l:"Tournament",v:tournaments.find(t=>t.id===activePool.tournamentId)?.name||"—",i:"⛳"},
-                        {l:"Field Size",v:`${getTournamentFieldSize(activePool.tournamentId)} players`,i:"👤"},
-                        {l:"Draft Format",v:`Snake · ${activePool.teamSize} rounds`,i:"🔄"},
-                        {l:"Scoring",v:`Best ${activePool.scoringGolfers} of ${activePool.teamSize}`,i:"🎯"},
-                        {l:"Shot Clock",v:`${activePool.shotClock}s`,i:"⏱️"},
-                        {l:"Cut Threshold",v:`${activePool.cutLine} must make cut`,i:"✂️"},
+	                      {[
+	                        {l:"Tournament",v:tournaments.find(t=>t.id===activePool.tournamentId)?.name||"—",i:"⛳"},
+	                        {l:"Field Size",v:`${poolTournamentField.length} players`,i:"👤"},
+	                        {l:"Draft Format",v:`Snake · ${activePool.teamSize} rounds`,i:"🔄"},
+	                        {l:"Scoring",v:`Best ${activePool.scoringGolfers} of ${activePool.teamSize}`,i:"🎯"},
+	                        {l:"Shot Clock",v:`${activePool.shotClock}s`,i:"⏱️"},
+	                        {l:"Cut Threshold",v:`${activePool.cutLine} must make cut`,i:"✂️"},
                       ].map(s=>(
                         <div key={s.l} style={{display:"flex",gap:12,alignItems:"center",padding:"8px 0",borderBottom:"1px solid var(--cream-2)"}}>
                           <span style={{fontSize:18}}>{s.i}</span>
@@ -2799,25 +2883,91 @@ export default function GolfPoolPro() {
             )}
 
             {/* ── LIVE / STANDINGS PHASE ── */}
-            {poolPhase==="live" && (()=>{
-              // Compute pool-specific standings using this pool's picks
-              const poolPicks = allDrafted[activePool.id] || [];
-              const sc = activePool.scoringGolfers;
-              const ts = activePool.teamSize;
-              const poolField = poolTournamentField;
+	            {poolPhase==="live" && (()=>{
+	              const started = hasTournamentStarted(activePool.tournamentId);
+
+	              // Before the tournament starts, show a "Drafted" view with teams only.
+	              if (!started) {
+	                const poolPicks = allDrafted[activePool.id] || [];
+	                const poolField = poolTournamentField;
+	                const draftedGolferIds = new Set(poolPicks.map(p=>p.golferId));
+	                const poolGolfers = poolField.filter(g=>draftedGolferIds.has(g.id));
+	                const getPoolTeam = (pId) =>
+	                  poolPicks.filter(d=>d.participantId===pId)
+	                    .map(d=>poolField.find(g=>g.id===d.golferId)).filter(Boolean);
+
+	                const t = tournaments.find((x)=>x.id===activePool.tournamentId);
+	                return (
+	                  <div className="page">
+	                    <div className="card" style={{padding:18,marginBottom:16}}>
+	                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
+	                        <div>
+	                          <p style={{fontSize:12,fontWeight:800,letterSpacing:".6px",textTransform:"uppercase",color:"var(--muted)"}}>Drafted</p>
+	                          <p style={{fontWeight:800,fontSize:16,color:"var(--forest)",marginTop:4}}>Waiting for tournament to start</p>
+	                          <p style={{fontSize:12,color:"var(--muted)",marginTop:4}}>
+	                            {t?.name || "Tournament"} starts {t?.date || "soon"}.
+	                          </p>
+	                        </div>
+	                        <div style={{textAlign:"right"}}>
+	                          <div style={{fontSize:12,color:"var(--muted)"}}>Golfers drafted</div>
+	                          <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:34,fontWeight:700,color:"var(--gold)",lineHeight:1}}>
+	                            {poolGolfers.length}
+	                          </div>
+	                        </div>
+	                      </div>
+	                    </div>
+
+	                    <div className="g2">
+	                      {joinedParticipants.map((p)=> {
+	                        const team = getPoolTeam(p.id);
+	                        return (
+	                          <div key={p.id} className="card" style={{padding:16}}>
+	                            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+	                              <Avatar init={p.avatar} size={34} color="var(--forest)"/>
+	                              <div style={{flex:1}}>
+	                                <div style={{fontWeight:800,color:"var(--forest)"}}>{p.name}</div>
+	                                <div style={{fontSize:12,color:"var(--muted)"}}>{team.length}/{activePool.teamSize} golfers</div>
+	                              </div>
+	                            </div>
+	                            {team.map((g,gi)=>(
+	                              <div key={g.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderTop:gi? "1px solid var(--cream-2)" : "none"}}>
+	                                <span style={{fontSize:12,fontWeight:700,color:"var(--muted)"}}>#{g.rank}</span>
+	                                <span style={{fontSize:13,fontWeight:700,color:"var(--forest)"}}>{g.name}</span>
+	                              </div>
+	                            ))}
+	                            {!team.length && <div style={{fontSize:12,color:"var(--muted)"}}>No picks yet.</div>}
+	                          </div>
+	                        );
+	                      })}
+	                    </div>
+	                  </div>
+	                );
+	              }
+
+	              // Compute pool-specific standings using this pool's picks
+	              const poolPicks = allDrafted[activePool.id] || [];
+	              const sc = activePool.scoringGolfers;
+	              const ts = activePool.teamSize;
+	              const poolField = poolTournamentField;
 
               const getPoolTeam = (pId) =>
                 poolPicks.filter(d=>d.participantId===pId)
                   .map(d=>poolField.find(g=>g.id===d.golferId)).filter(Boolean);
 
-              const getPoolScore = (pId) => {
-                const team = getPoolTeam(pId);
-                const scores = team.map(g=>{
-                  const ls=liveScores.find(l=>l.gId===g.id);
-                  return ls ? ls.R1+ls.R2+ls.R3+ls.R4 : 0;
-                }).sort((a,b)=>a-b);
-                return scores.slice(0,sc).reduce((s,v)=>s+v,0);
-              };
+	              const getPoolScore = (pId) => {
+	                const team = getPoolTeam(pId);
+	                const scores = team.map(g=>{
+	                  const ls=liveScores.find(l=>l.gId===g.id);
+	                  if (!ls) return null;
+	                  const rounds = [ls.R1,ls.R2,ls.R3,ls.R4];
+	                  const hasAny = rounds.some(v => typeof v === "number");
+	                  if (!hasAny) return null;
+	                  return rounds.reduce((sum,v)=>sum+(typeof v==="number"?v:0),0);
+	                }).sort((a,b)=>a-b);
+	                const real = scores.filter(v => typeof v === "number");
+	                if (!real.length) return null;
+	                return real.slice(0,sc).reduce((s,v)=>s+v,0);
+	              };
 
               // All golfers drafted in this pool (for pool-specific stats)
               const draftedGolferIds = new Set(poolPicks.map(p=>p.golferId));
@@ -2882,12 +3032,12 @@ export default function GolfPoolPro() {
 
                 {/* Pool standings header cards — uses poolStandings with real scores */}
                 <div className="g4" style={{marginBottom:20}}>
-                  {poolStandings.slice(0,4).map((p,i)=>{
-                    const teamScores = p.team.map(g=>{
-                      const ls=liveScores.find(l=>l.gId===g.id);
-                      return {g, tot: ls?ls.R1+ls.R2+ls.R3+ls.R4:null};
-                    }).sort((a,b)=>(a.tot??999)-(b.tot??999));
-                    return (
+	                  {poolStandings.slice(0,4).map((p,i)=>{
+	                    const teamScores = p.team.map(g=>{
+	                      const ls=liveScores.find(l=>l.gId===g.id);
+	                      return {g, tot: sumRounds(ls)};
+	                    }).sort((a,b)=>(a.tot??999)-(b.tot??999));
+	                    return (
                       <div key={p.id} className="card" style={{padding:18,border:i===0?"2px solid var(--gold)":"1px solid rgba(27,67,50,.06)"}}>
                         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
                           <Avatar init={p.avatar} color={["var(--gold)","#94A3B8","#CD7F32","var(--forest)"][i]}/>
@@ -2924,10 +3074,10 @@ export default function GolfPoolPro() {
                     <div className="lb-row lb-hdr" style={{gridTemplateColumns:"36px 1fr 50px 50px 50px 50px 60px"}}>
                       <span>Pos</span><span>Player</span><span style={{textAlign:"right"}}>R1</span><span style={{textAlign:"right"}}>R2</span><span style={{textAlign:"right"}}>R3</span><span style={{textAlign:"right"}}>R4</span><span style={{textAlign:"right"}}>Total</span>
                     </div>
-                    {[...liveScores]
-                      .map(s=>({...s,tot:s.R1+s.R2+s.R3+s.R4}))
-                      .sort((a,b)=>a.tot-b.tot)
-                      .map((s,idx)=>{
+	                    {[...liveScores]
+	                      .map(s=>({...s,tot:sumRounds(s)}))
+	                      .sort((a,b)=>(a.tot??999999999)-(b.tot??999999999))
+	                      .map((s,idx)=>{
                         const g=findGolferById(s.gId);
                         if(!g) return null;
                         const isInPool = draftedGolferIds.has(g.id);
@@ -2941,21 +3091,21 @@ export default function GolfPoolPro() {
                               <p style={{fontSize:11,color:"var(--muted)"}}>#{g.rank} · {g.drivDist} yds</p>
                             </div>
                             {[s.R1,s.R2,s.R3,s.R4].map((v,i)=><div key={i} style={{textAlign:"right"}}>{fmtScore(v)}</div>)}
-                            <div style={{textAlign:"right",fontSize:15}}>{fmtScore(s.tot)}</div>
-                          </div>
-                        );
-                    })}
-                  </div>
-                )}
+	                            <div style={{textAlign:"right",fontSize:15}}>{fmtScore(s.tot)}</div>
+	                          </div>
+	                        );
+	                    })}
+	                  </div>
+	                )}
 
                 {poolTab==="teams" && (
                   <div className="g2">
-                    {poolStandings.map((p,i)=>{
-                      const teamWithTot = p.team.map(g=>{
-                        const ls=liveScores.find(l=>l.gId===g.id);
-                        const tot=ls?ls.R1+ls.R2+ls.R3+ls.R4:null;
-                        return { g, tot, ls };
-                      });
+	                    {poolStandings.map((p,i)=>{
+	                      const teamWithTot = p.team.map(g=>{
+	                        const ls=liveScores.find(l=>l.gId===g.id);
+	                        const tot=sumRounds(ls);
+	                        return { g, tot, ls };
+	                      });
                       const countingIds = new Set(
                         teamWithTot
                           .filter(x=>x.tot!==null)
@@ -3078,16 +3228,18 @@ export default function GolfPoolPro() {
                           const myTeam = getPoolTeam(myParticipant.id);
                           const myRank = poolStandings.findIndex(p=>p.id===myParticipant.id)+1;
                           const myScore = getPoolScore(myParticipant.id);
-                          const myTeamScores = myTeam.map(g=>{const ls=liveScores.find(l=>l.gId===g.id);return ls?ls.R1+ls.R2+ls.R3+ls.R4:null;}).filter(x=>x!==null);
+	                          const myTeamScores = myTeam
+	                            .map(g=>{const ls=liveScores.find(l=>l.gId===g.id);return sumRounds(ls);})
+	                            .filter(x=>typeof x==="number");
                           const myBirdies = myTeam.reduce((t,g)=>{const ls=liveScores.find(l=>l.gId===g.id);return t+(ls?ls.birdies.reduce((a,b)=>a+b,0):0);},0);
                           const myEagles = myTeam.reduce((t,g)=>{const ls=liveScores.find(l=>l.gId===g.id);return t+(ls?ls.eagles.reduce((a,b)=>a+b,0):0);},0);
                           const myBogeys = myTeam.reduce((t,g)=>{const ls=liveScores.find(l=>l.gId===g.id);return t+(ls?ls.bogeys.reduce((a,b)=>a+b,0):0);},0);
                           const bestGolferScore = myTeamScores.length?Math.min(...myTeamScores):null;
-                          const bestGolfer = myTeam.find(g=>{const ls=liveScores.find(l=>l.gId===g.id);return ls&&(ls.R1+ls.R2+ls.R3+ls.R4)===bestGolferScore;});
+	                          const bestGolfer = myTeam.find(g=>{const ls=liveScores.find(l=>l.gId===g.id);return sumRounds(ls)===bestGolferScore;});
                           const allRounds = myTeam.flatMap(g=>{const ls=liveScores.find(l=>l.gId===g.id);return ls?[ls.R1,ls.R2,ls.R3,ls.R4]:[];});
                           const bestRound = allRounds.length?Math.min(...allRounds):null;
                           const sortedTeamScores = [...myTeamScores].sort((a,b)=>a-b);
-                          const countingScore = sortedTeamScores.slice(0,sc).reduce((a,b)=>a+b,0);
+	                          const countingScore = sortedTeamScores.length ? sortedTeamScores.slice(0,sc).reduce((a,b)=>a+b,0) : null;
 
                           return (
                             <div>
@@ -3183,12 +3335,15 @@ export default function GolfPoolPro() {
                               <div style={{marginTop:20}}>
                                 <h3 className="h3" style={{marginBottom:14}}>Your Golfers — Detailed</h3>
                                 <div className="g2">
-                                  {myTeam.map((g,gi)=>{
-                                    const ls=liveScores.find(l=>l.gId===g.id);
-                                    const tot=ls?ls.R1+ls.R2+ls.R3+ls.R4:null;
-                                    const sortedScores=[...myTeamScores].sort((a,b)=>a-b);
-                                    const isCounting=tot!==null&&sortedScores.indexOf(tot)<sc;
-                                    const tourneyPos=[...liveScores].map(s=>({...s,tot:s.R1+s.R2+s.R3+s.R4})).sort((a,b)=>a.tot-b.tot).findIndex(s=>s.gId===g.id)+1;
+	                                  {myTeam.map((g,gi)=>{
+	                                    const ls=liveScores.find(l=>l.gId===g.id);
+	                                    const tot=sumRounds(ls);
+	                                    const sortedScores=[...myTeamScores].sort((a,b)=>a-b);
+	                                    const isCounting=tot!==null&&sortedScores.indexOf(tot)<sc;
+	                                    const tourneyPos=[...liveScores]
+	                                      .map(s=>({...s,tot:sumRounds(s)}))
+	                                      .sort((a,b)=>(a.tot??999999999)-(b.tot??999999999))
+	                                      .findIndex(s=>s.gId===g.id)+1;
                                     return (
                                       <div key={g.id} className="card" style={{border:isCounting?"2px solid var(--gold)":"1px solid rgba(27,67,50,.06)"}}>
                                         <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:12}}>
@@ -3226,15 +3381,15 @@ export default function GolfPoolPro() {
                         <div className="lb-row lb-hdr" style={{gridTemplateColumns:"36px 1fr 60px 60px 60px 60px 70px"}}>
                           <span>#</span><span>Player</span><span style={{textAlign:"right"}}>R1</span><span style={{textAlign:"right"}}>R2</span><span style={{textAlign:"right"}}>R3</span><span style={{textAlign:"right"}}>R4</span><span style={{textAlign:"right"}}>Total</span>
                         </div>
-                        {[...poolTournamentField].sort((a,b)=>{
-                          const lsa=liveScores.find(l=>l.gId===a.id);
-                          const lsb=liveScores.find(l=>l.gId===b.id);
-                          const ta=lsa?lsa.R1+lsa.R2+lsa.R3+lsa.R4:999;
-                          const tb=lsb?lsb.R1+lsb.R2+lsb.R3+lsb.R4:999;
-                          return ta-tb;
-                        }).map((g,idx)=>{
-                          const ls=liveScores.find(l=>l.gId===g.id);
-                          const tot=ls?ls.R1+ls.R2+ls.R3+ls.R4:null;
+	                        {[...poolTournamentField].sort((a,b)=>{
+	                          const lsa=liveScores.find(l=>l.gId===a.id);
+	                          const lsb=liveScores.find(l=>l.gId===b.id);
+	                          const ta=(sumRounds(lsa) ?? 999999999);
+	                          const tb=(sumRounds(lsb) ?? 999999999);
+	                          return ta-tb;
+	                        }).map((g,idx)=>{
+	                          const ls=liveScores.find(l=>l.gId===g.id);
+	                          const tot=sumRounds(ls);
                           const isInPool=draftedGolferIds.has(g.id);
                           const pick=poolPicks.find(p=>p.golferId===g.id);
                           const drafter=joinedParticipants.find(p=>p.id===pick?.participantId);
@@ -3245,11 +3400,14 @@ export default function GolfPoolPro() {
                                 <p style={{fontWeight:isInPool?700:600,fontSize:14}}>{g.country} {g.name}{isInPool&&<span style={{marginLeft:6,fontSize:10,background:"var(--gold-pale)",color:"#7A5C00",padding:"1px 5px",borderRadius:3,fontWeight:700}}>★ {drafter?.name?.split(" ")[0]||"Pool"}</span>}</p>
                                 <p style={{fontSize:11,color:"var(--muted)"}}>#{g.rank} · {g.drivDist} yds · SG {g.sg>0?"+":""}{g.sg}</p>
                               </div>
-                              {ls?[ls.R1,ls.R2,ls.R3,ls.R4].map((v,i)=><div key={i} style={{textAlign:"right"}}>{fmtScore(v)}</div>):[null,null,null,null].map((_,i)=><div key={i} style={{textAlign:"right",color:"var(--muted)"}}>—</div>)}
-                              <div style={{textAlign:"right",fontSize:15}}>{tot!==null?fmtScore(tot):"—"}</div>
-                            </div>
-                          );
-                        })}
+	                              {ls
+	                                ? [ls.R1,ls.R2,ls.R3,ls.R4].map((v,i)=><div key={i} style={{textAlign:"right"}}>{fmtScore(v)}</div>)
+	                                : [null,null,null,null].map((_,i)=><div key={i} style={{textAlign:"right",color:"var(--muted)"}}></div>)
+	                              }
+	                              <div style={{textAlign:"right",fontSize:15}}>{fmtScore(tot)}</div>
+	                            </div>
+	                          );
+	                        })}
                       </div>
                     )}
 
@@ -3286,14 +3444,14 @@ export default function GolfPoolPro() {
                         <p style={{fontSize:11,color:"var(--muted)",marginBottom:16}}>
                           <span style={{color:"var(--gold)"}}>★</span> = drafted in this pool
                         </p>
-                        {poolStatsPlayer && (()=>{
-                          const rounds = getPlayerRounds(poolStatsPlayer.id);
-                          const sg = getSGData(poolStatsPlayer.id);
-                          const ls = liveScores.find(l=>l.gId===poolStatsPlayer.id);
-                          const tot = ls?ls.R1+ls.R2+ls.R3+ls.R4:null;
-                          const pick = poolPicks.find(p=>p.golferId===poolStatsPlayer.id);
-                          const drafter = joinedParticipants.find(p=>p.id===pick?.participantId);
-                          const isInPool = draftedGolferIds.has(poolStatsPlayer.id);
+	                        {poolStatsPlayer && (()=>{
+	                          const rounds = getPlayerRounds(poolStatsPlayer.id);
+	                          const sg = getSGData(poolStatsPlayer.id);
+	                          const ls = liveScores.find(l=>l.gId===poolStatsPlayer.id);
+	                          const tot = sumRounds(ls);
+	                          const pick = poolPicks.find(p=>p.golferId===poolStatsPlayer.id);
+	                          const drafter = joinedParticipants.find(p=>p.id===pick?.participantId);
+	                          const isInPool = draftedGolferIds.has(poolStatsPlayer.id);
                           return (
                             <div>
                               <div className="card" style={{marginBottom:20}}>
@@ -4069,11 +4227,11 @@ export default function GolfPoolPro() {
                     data={["R1","R2","R3","R4"].map((r,ri)=>({
                       round:r,
                       ...liveScores.slice(0,6).reduce((acc,s)=>{
-                        const g=findGolferById(s.gId);
-                        if(!g) return acc;
-                        acc[g.name.split(" ").pop()]=[s.R1,s.R2,s.R3,s.R4].slice(0,ri+1).reduce((a,b)=>a+b,0);
-                        return acc;
-                      },{})
+	                        const g=findGolferById(s.gId);
+	                        if(!g) return acc;
+	                        acc[g.name.split(" ").pop()]=[s.R1,s.R2,s.R3,s.R4].slice(0,ri+1).reduce((a,b)=>a+(typeof b==="number"?b:0),0);
+	                        return acc;
+	                      },{})
                     }))}>
                     <CartesianGrid stroke="var(--cream-2)" strokeDasharray="3 3"/>
                     <XAxis dataKey="round" tick={{fontSize:11,fill:"#78716C"}} axisLine={false} tickLine={false}/>
@@ -4089,9 +4247,12 @@ export default function GolfPoolPro() {
 
             {analyticsTab==="teams" && (
               <div className="g2">
-                {standings.map((p,i)=>{
-                  const scores=p.team.map(g=>{const ls=liveScores.find(l=>l.gId===g.id);return ls?ls.R1+ls.R2+ls.R3+ls.R4:0;}).sort((a,b)=>a-b);
-                  return (
+	                {standings.map((p,i)=>{
+	                  const scores=p.team
+	                    .map(g=>{const ls=liveScores.find(l=>l.gId===g.id);return sumRounds(ls);})
+	                    .filter(v=>typeof v==="number")
+	                    .sort((a,b)=>a-b);
+	                  return (
                     <div key={p.id} className="card">
                       <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:14}}>
                         <Avatar init={p.avatar} color={i===0?"var(--gold)":"var(--forest)"} size={36}/>
@@ -4104,19 +4265,19 @@ export default function GolfPoolPro() {
                           <p style={{fontSize:11,color:"var(--muted)"}}>best 2</p>
                         </div>
                       </div>
-                      {p.team.map((g,gi)=>{
-                        const ls=liveScores.find(l=>l.gId===g.id);
-                        const tot=ls?ls.R1+ls.R2+ls.R3+ls.R4:null;
-                        const isCounting=tot!==null&&scores.indexOf(tot)<2;
-                        return (
+	                      {p.team.map((g,gi)=>{
+	                        const ls=liveScores.find(l=>l.gId===g.id);
+	                        const tot=sumRounds(ls);
+	                        const isCounting=tot!==null&&scores.indexOf(tot)<2;
+	                        return (
                           <div key={g.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:"1px solid var(--cream-2)",opacity:isCounting?1:0.5}}>
                             {isCounting&&<span style={{fontSize:10,background:"var(--gold-pale)",color:"#7A5C00",padding:"1px 5px",borderRadius:3,fontWeight:700,flexShrink:0}}>★</span>}
-                            {!isCounting&&<span style={{width:19,flexShrink:0}}/>}
-                            <p style={{fontSize:13,flex:1,fontWeight:isCounting?600:400}}>{g.country} {g.name}</p>
-                            {tot!==null?fmtScore(tot):<span style={{fontSize:12,color:"var(--muted)"}}>—</span>}
-                          </div>
-                        );
-                      })}
+	                            {!isCounting&&<span style={{width:19,flexShrink:0}}/>}
+	                            <p style={{fontSize:13,flex:1,fontWeight:isCounting?600:400}}>{g.country} {g.name}</p>
+	                            {fmtScore(tot)}
+	                          </div>
+	                        );
+	                      })}
                     </div>
                   );
                 })}
@@ -4403,11 +4564,11 @@ export default function GolfPoolPro() {
                   })}
                 </div>
                 {statsPlayer && (()=>{
-                  const rounds=getPlayerRounds(statsPlayer.id);
-                  const sg=getSGData(statsPlayer.id);
-                  const ls=liveScores.find(l=>l.gId===statsPlayer.id);
-                  const tot=ls?ls.R1+ls.R2+ls.R3+ls.R4:null;
-                  return (
+	                  const rounds=getPlayerRounds(statsPlayer.id);
+	                  const sg=getSGData(statsPlayer.id);
+	                  const ls=liveScores.find(l=>l.gId===statsPlayer.id);
+	                  const tot=sumRounds(ls);
+	                  return (
                     <div>
                       <div className="card" style={{marginBottom:20}}>
                         <div style={{display:"flex",gap:20,alignItems:"center",flexWrap:"wrap"}}>
