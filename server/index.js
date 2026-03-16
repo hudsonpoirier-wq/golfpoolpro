@@ -381,6 +381,12 @@ function slashgolfRegisterCall() {
   SLASHGOLF_STATE.nextAllowedAtMs = Date.now() + SLASHGOLF_MIN_INTERVAL_MS;
 }
 
+function sleepMs(ms) {
+  const wait = Number(ms || 0);
+  if (!Number.isFinite(wait) || wait <= 0) return Promise.resolve();
+  return new Promise((r) => setTimeout(r, wait));
+}
+
 async function fetchRapidApiFieldPlayers(tournament) {
   // Separate "RapidAPI GolfCourseAPI" (courses) from "RapidAPI SlashGolf" (tournaments/leaderboards/fields).
   // If you only set RAPIDAPI_KEY/HOST, those will still work as a fallback.
@@ -474,16 +480,21 @@ async function fetchRapidApiFieldPlayers(tournament) {
 
     const decision = slashgolfCanCall();
     if (!decision.ok) {
-      return {
-        players: [],
-        provider: "RapidAPI",
-        urlsTried: dedupedUrls,
-        error: decision.reason === "monthly_limit"
-          ? `RapidAPI monthly limit reached (${SLASHGOLF_MONTHLY_LIMIT}/month).`
-          : decision.reason === "rate_limit"
-            ? "RapidAPI rate limit reached (per-minute)."
-            : "RapidAPI call spacing in effect.",
-      };
+      if (decision.reason === "spacing" && decision.retryAfterMs && decision.retryAfterMs < 2500) {
+        await sleepMs(decision.retryAfterMs);
+      } else {
+        return {
+          players: [],
+          provider: "RapidAPI",
+          urlsTried: dedupedUrls,
+          error: decision.reason === "monthly_limit"
+            ? `RapidAPI monthly limit reached (${SLASHGOLF_MONTHLY_LIMIT}/month).`
+            : decision.reason === "rate_limit"
+              ? "RapidAPI rate limit reached (per-minute)."
+              : "RapidAPI call spacing in effect.",
+          retryAfterMs: decision.retryAfterMs || null,
+        };
+      }
     }
     try {
       slashgolfRegisterCall();
@@ -517,7 +528,13 @@ async function fetchRapidApiFieldPlayers(tournament) {
         }
       }
       const decision = slashgolfCanCall();
-      if (!decision.ok) break;
+      if (!decision.ok) {
+        if (decision.reason === "spacing" && decision.retryAfterMs && decision.retryAfterMs < 2500) {
+          await sleepMs(decision.retryAfterMs);
+        } else {
+          break;
+        }
+      }
       try {
         slashgolfRegisterCall();
         const resp = await fetch(url, { headers, timeout: 12000 });
