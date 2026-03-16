@@ -4,7 +4,8 @@ const crypto = require("crypto");
 // Prefer DataGolf for schedules/fields when configured.
 const DATAGOLF_API_KEY = process.env.DATAGOLF_API_KEY || "";
 const DATAGOLF_BASE_URL = (process.env.DATAGOLF_BASE_URL || "https://feeds.datagolf.com").replace(/\/+$/, "");
-const DATAGOLF_SCHEDULE_TOUR = String(process.env.DATAGOLF_SCHEDULE_TOUR || process.env.DATAGOLF_TOUR || "pga").toLowerCase();
+// Default to "all" so majors + non-PGA tours show up without requiring env config.
+const DATAGOLF_SCHEDULE_TOUR = String(process.env.DATAGOLF_SCHEDULE_TOUR || process.env.DATAGOLF_TOUR || "all").toLowerCase();
 
 // Fallback providers (kept as a backup if DataGolf is unavailable).
 const SPORTS_DATA_KEY = process.env.SPORTS_DATA_IO_KEY;

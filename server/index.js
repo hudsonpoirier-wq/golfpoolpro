@@ -575,6 +575,22 @@ function normKey(v) {
     .trim();
 }
 
+function strongNameMatch(a, b) {
+  const aa = normKey(a);
+  const bb = normKey(b);
+  if (!aa || !bb) return false;
+  if (aa.includes(bb) || bb.includes(aa)) return true;
+
+  const ta = aa.split(" ").filter(Boolean);
+  const tb = bb.split(" ").filter(Boolean);
+  const small = ta.length <= tb.length ? ta : tb;
+  const big = ta.length <= tb.length ? tb : ta;
+  if (!small.length || !big.length) return false;
+  const bigSet = new Set(big);
+  const covered = small.filter((t) => bigSet.has(t)).length;
+  return covered >= Math.max(1, Math.ceil(small.length * 0.6));
+}
+
 function pickBestDataGolfEvent(scheduleItems, tournament) {
   const targetName = normKey(tournament?.name || "");
   const targetDate = tournament?.start_date || "";
@@ -614,8 +630,13 @@ async function fetchDataGolfFieldPlayers(tournament) {
   // 0) If this is already a DataGolf-sourced schedule row (id starts with dg_), the event_id is in the id.
   const tid = String(tournament?.id || "");
   if (tid.startsWith("dg_")) {
-    scheduleEventId = tid.slice(3);
     scheduleEventName = tournament?.name || null;
+    const candidate = tid.slice(3);
+    // DataGolf schedule rows sometimes use a hashed placeholder ID when event_id is "TBD".
+    // Never treat that as a real event_id for field matching.
+    if (!/^\d{4}_[0-9a-f]{12}$/i.test(candidate)) {
+      scheduleEventId = candidate;
+    }
   }
 
   // 1) For our stable internal ids (t1..t20), prefer matching against the dg_* tournament row
@@ -639,9 +660,13 @@ async function fetchDataGolfFieldPlayers(tournament) {
 
         const list = Array.isArray(candidates) ? candidates : [];
         const best = pickBestDataGolfEvent(list, tournament);
-        if (best?.id && String(best.id).startsWith("dg_")) {
-          scheduleEventId = String(best.id).slice(3);
-          scheduleEventName = best?.name || null;
+        const bestName = best?.name || best?.event_name || "";
+        // Only trust the nearby dg_* row if it strongly matches our intended tournament name.
+        // Otherwise we can accidentally lock onto the wrong week (common for majors if schedule tour excludes them).
+        if (best?.id && String(best.id).startsWith("dg_") && strongNameMatch(bestName, tournament?.name || "")) {
+          const candidate = String(best.id).slice(3);
+          if (!/^\d{4}_[0-9a-f]{12}$/i.test(candidate)) scheduleEventId = candidate;
+          scheduleEventName = bestName || null;
         }
       }
     } catch {}
@@ -666,6 +691,7 @@ async function fetchDataGolfFieldPlayers(tournament) {
       scheduleEventName = scheduleEventName || bestEvent?.event_name || bestEvent?.name || null;
     } catch {}
   }
+  if (scheduleEventId && !scheduleEventName) scheduleEventName = tournament?.name || null;
 
   const coercePlayers = (arr) => (arr || [])
     .map((p) => ({
@@ -717,6 +743,7 @@ async function fetchDataGolfFieldPlayers(tournament) {
   };
   const pickBestPlayersFromFlatRows = (flatRows) => {
     const scheduleName = normKey(scheduleEventName || "");
+    const strictName = scheduleEventId ? (scheduleEventName || tournament?.name || "") : "";
     const groups = new Map(); // key -> { event_id, event_name, start_date, rows }
     for (const row of flatRows || []) {
       if (!looksLikeFlatPlayerRow(row)) continue;
@@ -750,6 +777,7 @@ async function fetchDataGolfFieldPlayers(tournament) {
     let bestScore = Number.POSITIVE_INFINITY;
     let bestEventId = null;
     for (const g of groups.values()) {
+      if (strictName && !strongNameMatch(g.event_name || "", strictName)) continue;
       const evName = normKey(g.event_name || "");
       if (!evName) continue;
       const namePenalty =
@@ -771,6 +799,7 @@ async function fetchDataGolfFieldPlayers(tournament) {
 
   const pickBestEventFromPayload = (json) => {
     const scheduleName = normKey(scheduleEventName || "");
+    const strictName = scheduleEventId ? (scheduleEventName || tournament?.name || "") : "";
     const candidates = [];
     if (Array.isArray(json)) candidates.push(...json);
     if (json && typeof json === "object") {
@@ -784,7 +813,9 @@ async function fetchDataGolfFieldPlayers(tournament) {
     let best = null;
     let bestScore = Number.POSITIVE_INFINITY;
     let bestPlayers = [];
+    let bestEventId = null;
     for (const ev of candidates.filter((x) => x && typeof x === "object")) {
+      if (strictName && !strongNameMatch(ev?.event_name || ev?.eventName || ev?.name || "", strictName)) continue;
       const evName = getEventName(ev);
       if (!evName) continue;
       const namePenalty =
@@ -809,9 +840,10 @@ async function fetchDataGolfFieldPlayers(tournament) {
         bestScore = score;
         best = ev;
         bestPlayers = players;
+        bestEventId = ev?.event_id ?? ev?.eventId ?? ev?.id ?? null;
       }
     }
-    return { best, players: bestPlayers };
+    return { best, players: bestPlayers, event_id: bestEventId };
   };
 
   for (const tour of toursToTry) {
@@ -856,7 +888,7 @@ async function fetchDataGolfFieldPlayers(tournament) {
       const out = pickBestEventFromPayload(json);
       if (out.players?.length) {
         const players = await enrichPlayersFromDataGolfRefs(out.players);
-        return { players, provider: "DataGolf", url, urlsTried };
+        return { players, provider: "DataGolf", url, urlsTried, event_id: out.event_id || null };
       }
     } catch {}
   }
@@ -1401,6 +1433,7 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
       if (dg.players?.length) {
         players = dg.players;
         source = "DataGolf";
+        importedEventId = dg.event_id != null ? String(dg.event_id) : null;
         // Do not merge in other providers after DataGolf; it makes fields inaccurate.
         lockedToPrimary = true;
       }
@@ -1477,6 +1510,7 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
       tournament_id: tournamentId,
       source,
       event_id: importedEventId,
+      datagolf_event_id: source === "DataGolf" ? importedEventId : null,
       message: "Auto-imported tournament field.",
     });
   } catch (e) {
