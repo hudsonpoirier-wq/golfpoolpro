@@ -1226,7 +1226,8 @@ async function fetchDataGolfFieldPlayers(tournament) {
     };
   }
 
-  return { players: [], provider: "DataGolf", urlsTried, error: "No matching projected field found in DataGolf field-updates yet." };
+  const extra = majorFallback?.error ? ` Major scrape: ${majorFallback.error}` : "";
+  return { players: [], provider: "DataGolf", urlsTried, error: `No matching projected field found in DataGolf field-updates yet.${extra}` };
 }
 
 async function fetchRapidApiFieldPlayers(tournament) {
@@ -1876,6 +1877,91 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
       event_id: importedEventId,
       datagolf_event_id: source === "DataGolf" ? importedEventId : null,
       message: "Auto-imported tournament field.",
+    });
+  } catch (e) {
+    return next(e);
+  }
+});
+
+// Force-reset a tournament field shell list (tournament_scores rows) so a clean projected field can be imported.
+// Safe by default: refuses if real scoring has started, and refuses if draft picks exist unless `{"force": true}`.
+app.post("/api/admin/field-reset/:tournamentId", async (req, res, next) => {
+  try {
+    const required = process.env.ADMIN_TOKEN;
+    if (required && req.headers["x-admin-token"] !== required) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const { tournamentId } = req.params;
+    const force = !!req.body?.force;
+
+    const { data: tRow, error: tErr } = await supabase
+      .from("tournaments")
+      .select("id, name")
+      .eq("id", tournamentId)
+      .single();
+    if (tErr || !tRow) return res.status(404).json({ error: "Tournament not found." });
+
+    // Never reset once real scoring is present.
+    const { count: realCount, error: realErr } = await supabase
+      .from("tournament_scores")
+      .select("*", { count: "exact", head: true })
+      .eq("tournament_id", tournamentId)
+      .or("position.not.is.null,r1.not.is.null,r2.not.is.null,r3.not.is.null,r4.not.is.null");
+    if (realErr) return res.status(500).json({ error: realErr.message });
+    if (Number(realCount || 0) > 0) {
+      return res.status(400).json({ error: "Refusing to reset: tournament has real scoring data already." });
+    }
+
+    // If pools have picks for this tournament, reset can invalidate drafts.
+    const { data: pools, error: poolsErr } = await supabase
+      .from("pools")
+      .select("id")
+      .eq("tournament_id", tournamentId);
+    if (poolsErr) return res.status(500).json({ error: poolsErr.message });
+    const poolIds = (pools || []).map((p) => p.id).filter(Boolean);
+
+    let pickCount = 0;
+    if (poolIds.length) {
+      const { count, error: picksErr } = await supabase
+        .from("draft_picks")
+        .select("*", { count: "exact", head: true })
+        .in("pool_id", poolIds);
+      if (picksErr) return res.status(500).json({ error: picksErr.message });
+      pickCount = Number(count || 0);
+    }
+
+    if (pickCount > 0 && !force) {
+      return res.status(400).json({
+        error: "Refusing to reset: draft picks exist for this tournament. Delete the pool(s) or retry with {\"force\": true}.",
+        draft_picks: pickCount,
+      });
+    }
+
+    const { count: beforeCount } = await supabase
+      .from("tournament_scores")
+      .select("*", { count: "exact", head: true })
+      .eq("tournament_id", tournamentId);
+
+    const { error: delErr } = await supabase
+      .from("tournament_scores")
+      .delete()
+      .eq("tournament_id", tournamentId);
+    if (delErr) return res.status(500).json({ error: delErr.message });
+
+    try {
+      await supabase
+        .from("tournaments")
+        .update({ field_size: 0 })
+        .eq("id", tournamentId);
+    } catch {}
+
+    return res.json({
+      ok: true,
+      tournament_id: tournamentId,
+      tournament_name: tRow.name,
+      deleted_tournament_scores: Number(beforeCount || 0),
+      message: "Tournament field reset. Re-run import-field-auto to import a fresh projected field.",
     });
   } catch (e) {
     return next(e);
