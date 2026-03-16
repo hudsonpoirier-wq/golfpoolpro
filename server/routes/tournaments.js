@@ -23,6 +23,10 @@ router.get("/future", async (_req, res, next) => {
     }
 
     const providerRank = (id) => {
+      // Keep stable internal ids (t1..t20) preferred so existing pools don't lose their tournament reference.
+      if (/^t\\d+$/i.test(String(id || ""))) return 5;
+      // Prefer DataGolf schedule over other external sources.
+      if (String(id || "").startsWith("dg_")) return 4;
       if (String(id || "").startsWith("bdl_")) return 3;
       if (String(id || "").startsWith("sdio_")) return 2;
       if (String(id || "").startsWith("tsdb_")) return 1;

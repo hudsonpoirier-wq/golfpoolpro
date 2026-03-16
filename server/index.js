@@ -504,6 +504,24 @@ async function fetchDataGolfFieldPlayers(tournament) {
   ].map((t) => String(t || "").toLowerCase()).filter(Boolean)));
 
   const urlsTried = [];
+  let scheduleEventId = null;
+
+  // Use DataGolf schedule to get a stable event_id, then match that in field-updates.
+  // This is critical for majors where name-only matching can accidentally pick the wrong week.
+  try {
+    const year = String(tournament?.start_date || "").slice(0, 4) || String(new Date().getUTCFullYear());
+    const scheduleUrl = `${DATAGOLF_BASE_URL}/get-schedule?tour=all&season=${encodeURIComponent(year)}&upcoming_only=no&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
+    urlsTried.push(scheduleUrl);
+    const scheduleJson = await datagolfFetchJson(scheduleUrl);
+    const scheduleItems = []
+      .concat(scheduleJson?.schedule || [])
+      .concat(scheduleJson?.events || [])
+      .concat(scheduleJson?.data || [])
+      .concat(Array.isArray(scheduleJson) ? scheduleJson : [])
+      .filter((x) => x && typeof x === "object");
+    const bestEvent = pickBestDataGolfEvent(scheduleItems, tournament);
+    scheduleEventId = bestEvent?.event_id ?? bestEvent?.eventId ?? bestEvent?.id ?? null;
+  } catch {}
 
   const coercePlayers = (arr) => (arr || [])
     .map((p) => ({
@@ -588,6 +606,30 @@ async function fetchDataGolfFieldPlayers(tournament) {
     urlsTried.push(url);
     try {
       const json = await datagolfFetchJson(url);
+
+      // First: exact match by schedule event_id (most reliable).
+      if (scheduleEventId && json && typeof json === "object") {
+        const events = Array.isArray(json.events) ? json.events
+          : Array.isArray(json.tournaments) ? json.tournaments
+            : Array.isArray(json.data) ? json.data
+              : [];
+        const match = (events || []).find((ev) =>
+          String(ev?.event_id ?? ev?.eventId ?? ev?.id ?? "") === String(scheduleEventId)
+        );
+        if (match) {
+          const rawList =
+            (Array.isArray(match.field) && match.field) ||
+            (Array.isArray(match.players) && match.players) ||
+            (Array.isArray(match.entries) && match.entries) ||
+            (Array.isArray(match.data) && match.data) ||
+            findBestPlayerArray(match);
+          const players = coercePlayers(rawList);
+          if (players.length) {
+            return { players, provider: "DataGolf", url, urlsTried, event_id: String(scheduleEventId) };
+          }
+        }
+      }
+
       const out = pickBestEventFromPayload(json);
       if (out.players?.length) {
         return { players: out.players, provider: "DataGolf", url, urlsTried };

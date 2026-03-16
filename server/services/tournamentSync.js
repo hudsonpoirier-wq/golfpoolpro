@@ -1,5 +1,10 @@
 const fetch = require("node-fetch");
 
+// Prefer DataGolf for schedules/fields when configured.
+const DATAGOLF_API_KEY = process.env.DATAGOLF_API_KEY || "";
+const DATAGOLF_BASE_URL = (process.env.DATAGOLF_BASE_URL || "https://feeds.datagolf.com").replace(/\/+$/, "");
+
+// Fallback providers (kept as a backup if DataGolf is unavailable).
 const SPORTS_DATA_KEY = process.env.SPORTS_DATA_IO_KEY;
 const SPORTS_DATA_BASE = "https://api.sportsdata.io/golf/v2/json";
 const USE_SPORTSDATAIO = String(process.env.USE_SPORTSDATAIO || "").toLowerCase() === "true";
@@ -179,6 +184,55 @@ async function fetchBallDontLieTournaments(year, today) {
   return [];
 }
 
+async function fetchDataGolfTournaments(season, today) {
+  if (!DATAGOLF_API_KEY) return [];
+  const url = `${DATAGOLF_BASE_URL}/get-schedule?tour=all&season=${encodeURIComponent(String(season))}&upcoming_only=no&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
+  try {
+    const resp = await fetch(url, { timeout: 12000 });
+    if (!resp.ok) return [];
+    const json = await resp.json();
+    const items = []
+      .concat(json?.schedule || [])
+      .concat(json?.events || [])
+      .concat(json?.data || [])
+      .concat(Array.isArray(json) ? json : [])
+      .filter((x) => x && typeof x === "object");
+
+    const rows = items
+      .map((t) => {
+        const externalId = t.event_id || t.eventId || t.id || t.tournament_id || t.tournamentId;
+        const start = asDateOnly(t.start_date || t.startDate || t.date || t.starts_at);
+        if (!externalId || !start || start < today) return null;
+        const end = asDateOnly(t.end_date || t.endDate || t.ends_at) || plusDays(start, 3);
+        const name = t.event_name || t.name || t.tournament || t.event || `Tournament ${externalId}`;
+        const venue =
+          t.course_name ||
+          t.course ||
+          t.venue ||
+          t.location ||
+          t.city ||
+          null;
+        const purse = t.purse || t.purse_usd || t.total_purse || null;
+        const fieldSize = Number(t.field_size || t.fieldSize || 0) || null;
+        return {
+          id: `dg_${externalId}`,
+          name,
+          venue,
+          start_date: start,
+          end_date: end,
+          purse,
+          field_size: fieldSize,
+          status: start > today ? "upcoming" : "active",
+        };
+      })
+      .filter(Boolean);
+
+    return rows;
+  } catch {
+    return [];
+  }
+}
+
 function pickBestSource(sourceRows) {
   const sorted = Object.entries(sourceRows)
     .map(([provider, rows]) => ({ provider, rows: rows || [], count: (rows || []).length }))
@@ -187,14 +241,65 @@ function pickBestSource(sourceRows) {
   return { best, counts: sorted.reduce((acc, x) => ({ ...acc, [x.provider]: x.count }), {}) };
 }
 
+function normKey(v) {
+  return String(v || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function dateDistanceDays(a, b) {
+  if (!a || !b) return 3650;
+  const da = new Date(a);
+  const db = new Date(b);
+  if (Number.isNaN(da.getTime()) || Number.isNaN(db.getTime())) return 3650;
+  return Math.abs(Math.round((da.getTime() - db.getTime()) / 86400000));
+}
+
+function overlayTemplateFromDataGolf(templateRows, dataGolfRows) {
+  if (!Array.isArray(templateRows) || !Array.isArray(dataGolfRows) || !dataGolfRows.length) return templateRows;
+  const dg = dataGolfRows
+    .map((t) => ({ ...t, _k: `${normKey(t.name)}|${t.start_date}` }))
+    .filter((t) => t.name && t.start_date);
+
+  return templateRows.map((t) => {
+    const targetName = normKey(t.name);
+    const targetDate = t.start_date;
+    let best = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (const ev of dg) {
+      const evName = normKey(ev.name);
+      const namePenalty = (evName.includes(targetName) || targetName.includes(evName)) ? 0 : 35;
+      const datePenalty = dateDistanceDays(targetDate, ev.start_date);
+      const score = namePenalty + datePenalty;
+      if (score < bestScore) { bestScore = score; best = ev; }
+    }
+    // Only overlay when reasonably close (prevents accidental mismatches).
+    if (!best || bestScore > 10) return t;
+    return {
+      ...t,
+      name: best.name || t.name,
+      venue: best.venue || t.venue,
+      start_date: best.start_date || t.start_date,
+      end_date: best.end_date || t.end_date,
+      purse: best.purse ?? t.purse,
+      field_size: best.field_size ?? t.field_size,
+      status: best.status || t.status,
+    };
+  });
+}
+
 async function seedUpcomingTournaments(supabase, year = new Date().getUTCFullYear()) {
   const today = new Date().toISOString().slice(0, 10);
   const years = [year, year + 1];
 
+  const dataGolfRows = [];
   const sportsDataRows = [];
   const theSportsDbRows = [];
   const ballDontLieRows = [];
   for (const y of years) {
+    dataGolfRows.push(...(await fetchDataGolfTournaments(y, today)));
     sportsDataRows.push(...(await fetchSportsDataTournaments(y, today)));
     theSportsDbRows.push(...(await fetchTheSportsDbTournaments(y, today)));
     ballDontLieRows.push(...(await fetchBallDontLieTournaments(y, today)));
@@ -202,13 +307,20 @@ async function seedUpcomingTournaments(supabase, year = new Date().getUTCFullYea
   const templateRows = normalizeTemplate(year, today);
 
   const { best, counts } = pickBestSource({
+    ...(DATAGOLF_API_KEY ? { DATAGOLF: dataGolfRows } : {}),
     ...(BALLDONTLIE_PGA_KEY ? { BALLDONTLIE: ballDontLieRows } : {}),
     ...(USE_SPORTSDATAIO ? { SPORTSDATAIO: sportsDataRows } : {}),
     THESPORTSDB: theSportsDbRows,
     TEMPLATE: templateRows,
   });
 
-  const rows = best.count ? best.rows : templateRows;
+  // If DataGolf is available, always upsert:
+  // 1) DataGolf schedule rows (dg_* ids) for breadth/accuracy
+  // 2) Our stable internal ids (t1..t20) overlaid with DataGolf values so existing pools keep working
+  const templateOverlaid = DATAGOLF_API_KEY ? overlayTemplateFromDataGolf(templateRows, dataGolfRows) : templateRows;
+  const rows = DATAGOLF_API_KEY
+    ? [...dataGolfRows, ...templateOverlaid]
+    : (best.count ? best.rows : templateRows);
   if (!rows.length) return { seeded: 0, source: "NONE", counts };
 
   const { error } = await supabase
