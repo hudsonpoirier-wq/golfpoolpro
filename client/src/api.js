@@ -193,6 +193,16 @@ export const Pools = {
   presence: (poolId) => get(`/api/pools/${poolId}/presence`),
   /** Stop advertising presence (on leave/unload) */
   leavePresence: (poolId) => del(`/api/pools/${poolId}/presence`),
+
+  /** Read in-memory pool chat */
+  chatList: (poolId) => get(`/api/pools/${poolId}/chat`),
+  /** Send a chat message */
+  chatSend: (poolId, text) => post(`/api/pools/${poolId}/chat`, { text }),
+  /** Host-only ping (posts a system message) */
+  chatPing: (poolId) => post(`/api/pools/${poolId}/chat/ping`, {}),
+
+  /** Host-only: remove a member (lobby only) */
+  removeMember: (poolId, userId) => del(`/api/pools/${poolId}/members/${encodeURIComponent(userId)}`),
 };
 
 
@@ -264,6 +274,13 @@ export const Draft = {
 
   /** Make a draft pick */
   pick: (poolId, golferId) => post(`/api/draft/${poolId}/pick`, { golferId }),
+
+  /** Host-only: pause the draft */
+  pause: (poolId) => post(`/api/draft/${poolId}/pause`, {}),
+  /** Host-only: resume the draft */
+  resume: (poolId) => post(`/api/draft/${poolId}/resume`, {}),
+  /** Host-only: pick for the current drafter */
+  forcePick: (poolId, golferId) => post(`/api/draft/${poolId}/force-pick`, { golferId }),
 };
 
 

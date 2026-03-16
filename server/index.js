@@ -27,10 +27,18 @@ const inviteRoutes  = require("./routes/invites");
 const draftRoutes   = require("./routes/draft");
 const tournamentRoutes = require("./routes/tournaments");
 const courseRoutes = require("./routes/courses");
+const publicRoutes = require("./routes/public");
 const { syncLiveScores, seedGolfers, resolveTheSportsDbEventId } = require("./services/scoresSync");
 const { seedUpcomingTournaments } = require("./services/tournamentSync");
 
 const app = express();
+
+const ANALYTICS_ERRORS_MAX = 80;
+const analytics = {
+  startedAt: new Date().toISOString(),
+  scoreSync: { lastRunAt: null, lastOkAt: null, lastErrorAt: null, lastError: null },
+  errors: [],
+};
 
 // ─── Supabase admin client (service role — never expose to client) ───
 const supabase = createClient(
@@ -39,6 +47,7 @@ const supabase = createClient(
   { auth: { persistSession: false } }
 );
 app.locals.supabase = supabase;
+app.locals.analytics = analytics;
 
 // ─── Middleware ───────────────────────────────────────────────
 app.use(helmet());
@@ -80,6 +89,7 @@ app.use("/api/invite",  inviteRoutes);
 app.use("/api/draft",   draftRoutes);
 app.use("/api/tournaments", tournamentRoutes);
 app.use("/api/courses", courseRoutes);
+app.use("/api/public", publicRoutes);
 
 // Health check
 app.get("/api/health", (_req, res) => res.json({ status: "ok", ts: new Date().toISOString() }));
@@ -644,17 +654,61 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
   }
 });
 
+// ─── Admin analytics ──────────────────────────────────────────
+app.get("/api/admin/analytics", (req, res) => {
+  const required = process.env.ADMIN_TOKEN;
+  if (required && req.headers["x-admin-token"] !== required) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  return res.json({
+    startedAt: analytics.startedAt,
+    scoreSync: analytics.scoreSync,
+    routes: {
+      courses: typeof courseRoutes._stats === "function" ? courseRoutes._stats() : null,
+      pools: typeof poolRoutes._stats === "function" ? poolRoutes._stats() : null,
+      draft: typeof draftRoutes._stats === "function" ? draftRoutes._stats() : null,
+    },
+    recentErrors: analytics.errors.slice(-ANALYTICS_ERRORS_MAX),
+  });
+});
+
+app.get("/api/admin/errors", (req, res) => {
+  const required = process.env.ADMIN_TOKEN;
+  if (required && req.headers["x-admin-token"] !== required) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  return res.json({ recentErrors: analytics.errors.slice(-ANALYTICS_ERRORS_MAX) });
+});
+
 // ─── Global error handler ─────────────────────────────────────
 app.use((err, _req, res, _next) => {
   console.error(err);
+  try {
+    analytics.errors.push({
+      ts: new Date().toISOString(),
+      status: err?.status || 500,
+      message: String(err?.message || "Internal server error"),
+      stack: String(err?.stack || ""),
+    });
+    while (analytics.errors.length > ANALYTICS_ERRORS_MAX) analytics.errors.shift();
+  } catch {}
   res.status(err.status || 500).json({ error: err.message || "Internal server error" });
 });
 
 // ─── Live score sync cron ─────────────────────────────────────
 // Every 30 seconds during active tournaments
 cron.schedule("*/30 * * * * *", async () => {
-  try { await syncLiveScores(supabase); }
-  catch (e) { console.error("Score sync error:", e.message); }
+  analytics.scoreSync.lastRunAt = new Date().toISOString();
+  try {
+    await syncLiveScores(supabase);
+    analytics.scoreSync.lastOkAt = new Date().toISOString();
+    analytics.scoreSync.lastErrorAt = null;
+    analytics.scoreSync.lastError = null;
+  } catch (e) {
+    analytics.scoreSync.lastErrorAt = new Date().toISOString();
+    analytics.scoreSync.lastError = String(e?.message || e);
+    console.error("Score sync error:", e.message);
+  }
 });
 
 const PORT = process.env.PORT || 4000;

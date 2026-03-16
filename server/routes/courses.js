@@ -345,4 +345,18 @@ router.get("/:id", async (req, res, next) => {
   }
 });
 
+router._stats = () => ({
+  provider: COURSE_PROVIDER,
+  cacheEntries: RESPONSE_CACHE.size,
+  cacheTtlMs: COURSE_CACHE_TTL_MS,
+  dayKey: RATE_STATE.dayKey,
+  dailyLimit: DAILY_LIMIT,
+  windowTz: COURSE_TZ,
+  windowStartHour: WINDOW_START_HOUR,
+  windowEndHour: WINDOW_END_HOUR,
+  countToday: RATE_STATE.count,
+  nextAllowedAtMs: RATE_STATE.nextAllowedAtMs,
+  minIntervalMs: MIN_INTERVAL_MS,
+});
+
 module.exports = router;

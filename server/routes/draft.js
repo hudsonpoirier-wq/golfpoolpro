@@ -4,6 +4,9 @@
 const router = require("express").Router();
 const { requireAuth } = require("../middleware/auth");
 
+// In-memory controls (MVP): not persisted across restarts.
+const pausedDraftPools = new Set(); // poolId -> paused boolean
+
 // ─── GET /api/draft/:poolId ───────────────────────────────────
 // Returns full draft state: picks, current turn, time remaining
 router.get("/:poolId", requireAuth, async (req, res, next) => {
@@ -46,16 +49,18 @@ router.get("/:poolId", requireAuth, async (req, res, next) => {
     // Snake draft order: round by round, reversing each round
     const draftOrder = buildSnakeOrder(members.map(m => m.user_id), pool.team_size);
     const currentPickOwner = isDone ? null : draftOrder[pickNum];
+    const nextPickOwners = isDone ? [] : draftOrder.slice(pickNum, pickNum + 5);
+    const paused = pausedDraftPools.has(poolId);
 
     // Time remaining on current pick (server-side clock)
     const lastPickTime = picks?.length
       ? new Date(picks[picks.length - 1].picked_at)
       : new Date();
     const elapsed = (Date.now() - lastPickTime.getTime()) / 1000;
-    const timeRemaining = Math.max(0, pool.shot_clock - elapsed);
+    const timeRemaining = paused ? pool.shot_clock : Math.max(0, pool.shot_clock - elapsed);
 
     // Auto-skip if clock has expired
-    if (!isDone && timeRemaining <= 0 && currentPickOwner) {
+    if (!paused && !isDone && timeRemaining <= 0 && currentPickOwner) {
       await autoSkip(sb, poolId, currentPickOwner, pool, picks, draftOrder);
       return res.redirect(307, `/api/draft/${poolId}`);
     }
@@ -66,11 +71,40 @@ router.get("/:poolId", requireAuth, async (req, res, next) => {
       picks,
       draftOrder,
       currentPickOwner,
+      nextPickOwners,
       pickNumber: pickNum,
       totalPicks,
       isDone,
       timeRemaining: Math.round(timeRemaining),
+      paused,
     });
+  } catch (e) { next(e); }
+});
+
+// ─── POST /api/draft/:poolId/pause ────────────────────────────
+// Host-only: pauses pick timer and blocks picks.
+router.post("/:poolId/pause", requireAuth, async (req, res, next) => {
+  try {
+    const sb = req.app.locals.supabase;
+    const { poolId } = req.params;
+    const { data: pool } = await sb.from("pools").select("host_id").eq("id", poolId).single();
+    if (!pool) return res.status(404).json({ error: "Pool not found." });
+    if (String(pool.host_id) !== String(req.user.id)) return res.status(403).json({ error: "Only the host can pause the draft." });
+    pausedDraftPools.add(poolId);
+    res.json({ paused: true });
+  } catch (e) { next(e); }
+});
+
+// ─── POST /api/draft/:poolId/resume ───────────────────────────
+router.post("/:poolId/resume", requireAuth, async (req, res, next) => {
+  try {
+    const sb = req.app.locals.supabase;
+    const { poolId } = req.params;
+    const { data: pool } = await sb.from("pools").select("host_id").eq("id", poolId).single();
+    if (!pool) return res.status(404).json({ error: "Pool not found." });
+    if (String(pool.host_id) !== String(req.user.id)) return res.status(403).json({ error: "Only the host can resume the draft." });
+    pausedDraftPools.delete(poolId);
+    res.json({ paused: false });
   } catch (e) { next(e); }
 });
 
@@ -83,6 +117,7 @@ router.post("/:poolId/pick", requireAuth, async (req, res, next) => {
     const { golferId } = req.body;
 
     if (!golferId) return res.status(400).json({ error: "golferId is required." });
+    if (pausedDraftPools.has(poolId)) return res.status(409).json({ error: "Draft is paused." });
 
     const { data: pool } = await sb
       .from("pools")
@@ -135,6 +170,62 @@ router.post("/:poolId/pick", requireAuth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// ─── POST /api/draft/:poolId/force-pick ───────────────────────
+// Host-only: pick for the current drafter. Body: { golferId }
+router.post("/:poolId/force-pick", requireAuth, async (req, res, next) => {
+  try {
+    const sb = req.app.locals.supabase;
+    const { poolId } = req.params;
+    const { golferId } = req.body;
+    if (!golferId) return res.status(400).json({ error: "golferId is required." });
+
+    const { data: pool } = await sb
+      .from("pools")
+      .select("host_id, status, team_size")
+      .eq("id", poolId)
+      .single();
+    if (!pool) return res.status(404).json({ error: "Pool not found." });
+    if (String(pool.host_id) !== String(req.user.id)) return res.status(403).json({ error: "Only the host can force a pick." });
+    if (pool.status !== "draft") return res.status(400).json({ error: "Draft is not active." });
+    if (pausedDraftPools.has(poolId)) return res.status(409).json({ error: "Draft is paused." });
+
+    const { data: members } = await sb
+      .from("pool_members")
+      .select("user_id, joined_at")
+      .eq("pool_id", poolId)
+      .order("joined_at");
+
+    const { data: picks } = await sb
+      .from("draft_picks")
+      .select("user_id, golfer_id, pick_number, picked_at")
+      .eq("pool_id", poolId)
+      .order("pick_number");
+
+    const totalPicks = members.length * pool.team_size;
+    if (picks.length >= totalPicks) return res.status(400).json({ error: "Draft is complete." });
+
+    const draftOrder = buildSnakeOrder(members.map(m => m.user_id), pool.team_size);
+    const currentOwner = draftOrder[picks.length];
+
+    if (picks.find(p => p.golfer_id === golferId)) {
+      return res.status(409).json({ error: "This golfer has already been drafted." });
+    }
+
+    const { data: pick, error } = await sb
+      .from("draft_picks")
+      .insert({ pool_id: poolId, user_id: currentOwner, golfer_id: golferId, pick_number: picks.length })
+      .select()
+      .single();
+    if (error) return res.status(400).json({ error: error.message });
+
+    if (picks.length + 1 >= totalPicks) {
+      await sb.from("pools").update({ status: "live" }).eq("id", poolId);
+    }
+
+    res.status(201).json({ pick, forcedFor: currentOwner, isDraftComplete: picks.length + 1 >= totalPicks });
+  } catch (e) { next(e); }
+});
+
 // ─── Helpers ──────────────────────────────────────────────────
 
 function buildSnakeOrder(userIds, teamSize) {
@@ -169,5 +260,9 @@ async function autoSkip(sb, poolId, userId, pool, picks, draftOrder) {
     await sb.from("pools").update({ status: "live" }).eq("id", poolId);
   }
 }
+
+router._stats = () => ({
+  pausedDraftPools: pausedDraftPools.size,
+});
 
 module.exports = router;

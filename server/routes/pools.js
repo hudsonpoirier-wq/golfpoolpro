@@ -12,6 +12,17 @@ function isInt(n) {
   return Number.isInteger(n) && Number.isFinite(n);
 }
 
+const CHAT_MAX_MESSAGES = 200;
+const poolChat = new Map(); // poolId -> [{ id, ts, user_id, type, text }]
+
+function pushChat(poolId, msg) {
+  const list = poolChat.get(poolId) || [];
+  list.push(msg);
+  while (list.length > CHAT_MAX_MESSAGES) list.shift();
+  poolChat.set(poolId, list);
+  return list;
+}
+
 const LOBBY_TTL_MS = 15000;
 const lobbyPresence = new Map(); // poolId -> Map(userId -> lastSeenMs)
 
@@ -184,6 +195,117 @@ router.delete("/:id/presence", requireAuth, async (req, res, next) => {
       byUser.delete(req.user.id);
       if (!byUser.size) lobbyPresence.delete(id);
     }
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ─── GET /api/pools/:id/chat ─────────────────────────────────
+// Lightweight in-memory lobby chat (not persisted).
+router.get("/:id/chat", requireAuth, async (req, res, next) => {
+  try {
+    const sb = req.app.locals.supabase;
+    const { id } = req.params;
+    const { data: member } = await sb
+      .from("pool_members")
+      .select("user_id")
+      .eq("pool_id", id)
+      .eq("user_id", req.user.id)
+      .single();
+    if (!member) return res.status(403).json({ error: "You are not a member of this pool." });
+    res.json({ messages: poolChat.get(id) || [] });
+  } catch (e) { next(e); }
+});
+
+// ─── POST /api/pools/:id/chat ────────────────────────────────
+// Body: { text }
+router.post("/:id/chat", requireAuth, async (req, res, next) => {
+  try {
+    const sb = req.app.locals.supabase;
+    const { id } = req.params;
+    const text = String(req.body?.text || "").trim();
+    if (!text) return res.status(400).json({ error: "Message text is required." });
+    if (text.length > 300) return res.status(400).json({ error: "Message too long (max 300 chars)." });
+    const { data: member } = await sb
+      .from("pool_members")
+      .select("user_id")
+      .eq("pool_id", id)
+      .eq("user_id", req.user.id)
+      .single();
+    if (!member) return res.status(403).json({ error: "You are not a member of this pool." });
+
+    const msg = {
+      id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      ts: new Date().toISOString(),
+      user_id: req.user.id,
+      type: "chat",
+      text,
+    };
+    pushChat(id, msg);
+    res.status(201).json({ message: msg });
+  } catch (e) { next(e); }
+});
+
+// ─── POST /api/pools/:id/chat/ping ───────────────────────────
+// Host-only: posts a system ping into chat.
+router.post("/:id/chat/ping", requireAuth, async (req, res, next) => {
+  try {
+    const sb = req.app.locals.supabase;
+    const { id } = req.params;
+    const { data: pool } = await sb.from("pools").select("host_id").eq("id", id).single();
+    if (!pool) return res.status(404).json({ error: "Pool not found." });
+    if (String(pool.host_id) !== String(req.user.id)) {
+      return res.status(403).json({ error: "Only the host can ping the lobby." });
+    }
+    const msg = {
+      id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      ts: new Date().toISOString(),
+      user_id: req.user.id,
+      type: "ping",
+      text: "Host pinged the lobby: draft starting soon.",
+    };
+    pushChat(id, msg);
+    res.status(201).json({ message: msg });
+  } catch (e) { next(e); }
+});
+
+// ─── DELETE /api/pools/:id/members/:userId ────────────────────
+// Host-only: remove a member (only before draft starts).
+router.delete("/:id/members/:userId", requireAuth, async (req, res, next) => {
+  try {
+    const sb = req.app.locals.supabase;
+    const { id, userId } = req.params;
+
+    const { data: pool } = await sb.from("pools").select("host_id, status").eq("id", id).single();
+    if (!pool) return res.status(404).json({ error: "Pool not found." });
+    if (String(pool.host_id) !== String(req.user.id)) return res.status(403).json({ error: "Only the host can remove members." });
+    if (pool.status !== "lobby") return res.status(409).json({ error: "Members can only be removed before the draft starts." });
+
+    if (String(userId) === String(pool.host_id)) {
+      return res.status(400).json({ error: "Host cannot be removed from their own pool." });
+    }
+
+    const { error: delErr } = await sb
+      .from("pool_members")
+      .delete()
+      .eq("pool_id", id)
+      .eq("user_id", userId);
+    if (delErr) return res.status(400).json({ error: delErr.message || "Could not remove member." });
+
+    // Remove presence entry if present.
+    const byUser = lobbyPresence.get(id);
+    if (byUser) {
+      byUser.delete(userId);
+      if (!byUser.size) lobbyPresence.delete(id);
+    }
+
+    pushChat(id, {
+      id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      ts: new Date().toISOString(),
+      user_id: req.user.id,
+      type: "ping",
+      text: "Host removed a participant from the pool.",
+    });
+
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -374,6 +496,13 @@ router.get("/:id/standings", requireAuth, async (req, res, next) => {
     if (error) return res.status(500).json({ error: error.message });
     res.json({ standings: data });
   } catch (e) { next(e); }
+});
+
+router._stats = () => ({
+  chatPools: poolChat.size,
+  chatMessages: [...poolChat.values()].reduce((s, arr) => s + (arr?.length || 0), 0),
+  lobbyPools: lobbyPresence.size,
+  lobbyUsers: [...lobbyPresence.values()].reduce((s, m) => s + (m?.size || 0), 0),
 });
 
 module.exports = router;

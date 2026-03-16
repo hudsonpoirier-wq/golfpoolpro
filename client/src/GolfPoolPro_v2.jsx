@@ -677,6 +677,11 @@ export default function GolfPoolPro() {
   const [readyBusyMap,setReadyBusyMap] = useState({});
   const [deleteBusy,setDeleteBusy] = useState(false);
   const [activeLobbyUserIds,setActiveLobbyUserIds] = useState([]);
+  const [chatMessages,setChatMessages] = useState([]);
+  const [chatText,setChatText] = useState("");
+  const [chatBusy,setChatBusy] = useState(false);
+  const [draftPaused,setDraftPaused] = useState(false);
+  const [serverTimeRemaining,setServerTimeRemaining] = useState(null);
   const [resetPass,setResetPass] = useState("");
   const [resetPassConfirm,setResetPassConfirm] = useState("");
   const loginEmailRef = useRef(null);
@@ -688,6 +693,7 @@ export default function GolfPoolPro() {
   const resetPassRef = useRef(null);
   const resetPassConfirmRef = useRef(null);
   const userMenuRef = useRef(null);
+  const chatEndRef = useRef(null);
 
   const handleAuthEnter = (e, { nextRef = null, submit = null } = {}) => {
     if (e.key !== "Enter") return;
@@ -1190,6 +1196,51 @@ export default function GolfPoolPro() {
     };
   }, [activePool?.id, poolPhase, view, currentUser]);
 
+  // Lightweight pool chat polling (lobby + draft).
+  useEffect(() => {
+    if (!apiToken.get() || !activePool?.id || view !== "pool") return;
+    if (poolPhase !== "lobby" && poolPhase !== "draft") return;
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const resp = await Pools.chatList(activePool.id);
+        if (stopped) return;
+        const msgs = Array.isArray(resp?.messages) ? resp.messages : [];
+        setChatMessages(msgs);
+      } catch {}
+    };
+    poll();
+    const t = setInterval(poll, 4000);
+    return () => {
+      stopped = true;
+      clearInterval(t);
+    };
+  }, [activePool?.id, poolPhase, view, currentUser]);
+
+  // Draft state polling (pause + server time remaining) for shared drafts.
+  useEffect(() => {
+    if (!apiToken.get() || !activePool?.id || view !== "pool" || poolPhase !== "draft") return;
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const state = await Draft.state(activePool.id);
+        if (stopped) return;
+        setDraftPaused(!!state?.paused);
+        if (typeof state?.timeRemaining === "number") setServerTimeRemaining(state.timeRemaining);
+      } catch {}
+    };
+    poll();
+    const t = setInterval(poll, 4000);
+    return () => {
+      stopped = true;
+      clearInterval(t);
+    };
+  }, [activePool?.id, poolPhase, view, currentUser]);
+
+  useEffect(() => {
+    try { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); } catch {}
+  }, [chatMessages.length]);
+
   // Require backend auth session for all non-invite screens.
   useEffect(()=>{
     if(!hasBackendSession && view!=="invite"){
@@ -1294,6 +1345,31 @@ export default function GolfPoolPro() {
   const makePick = async (golferId,auto=false) => {
     if(!draftActive||draftDone) return;
     if (!auto && effectiveUserId && currentParticipant?.id && String(currentParticipant.id) !== String(effectiveUserId)) {
+      if (isHostOfActivePool && activePool?.id && apiToken.get()) {
+        const ok = window.confirm(`Force-pick for ${currentParticipant?.name || "current drafter"}?`);
+        if (!ok) return;
+        try {
+          await Draft.forcePick(activePool.id, golferId);
+          const state = await Draft.state(activePool.id);
+          const picks = state?.picks || [];
+          const mapped = picks.map((p)=>({
+            golferId: p.golfer_id,
+            participantId: p.user_id,
+            pickNum: p.pick_number,
+          }));
+          setDrafted(mapped);
+          setAllDrafted(ad=>({...ad,[activePool.id]:mapped}));
+          setCurrentPick(picks.length);
+          if (state?.isDone || picks.length >= totalPicks) {
+            setDraftDone(true);
+            setDraftActive(false);
+          }
+          return;
+        } catch (e) {
+          notify(e?.message || "Force pick failed. Try again.", "error");
+          return;
+        }
+      }
       notify("It's not your turn to pick.", "error");
       return;
     }
@@ -1388,6 +1464,65 @@ export default function GolfPoolPro() {
   const notify = (msg,type="success") => {
     setNotification({msg,type});
     setTimeout(()=>setNotification(null),3000);
+  };
+
+  const sendChat = async () => {
+    if (!apiToken.get() || !activePool?.id) return;
+    if (chatBusy) return;
+    const text = chatText.trim();
+    if (!text) return;
+    setChatBusy(true);
+    try {
+      await Pools.chatSend(activePool.id, text);
+      setChatText("");
+      try {
+        const resp = await Pools.chatList(activePool.id);
+        setChatMessages(Array.isArray(resp?.messages) ? resp.messages : []);
+      } catch {}
+    } catch (e) {
+      notify(e?.message || "Could not send message.", "error");
+    } finally {
+      setChatBusy(false);
+    }
+  };
+
+  const pingLobby = async () => {
+    if (!apiToken.get() || !activePool?.id) return;
+    if (chatBusy) return;
+    setChatBusy(true);
+    try {
+      await Pools.chatPing(activePool.id);
+      try {
+        const resp = await Pools.chatList(activePool.id);
+        setChatMessages(Array.isArray(resp?.messages) ? resp.messages : []);
+      } catch {}
+    } catch (e) {
+      notify(e?.message || "Could not ping lobby.", "error");
+    } finally {
+      setChatBusy(false);
+    }
+  };
+
+  const pauseDraft = async () => {
+    if (!apiToken.get() || !activePool?.id) return;
+    try {
+      await Draft.pause(activePool.id);
+      setDraftPaused(true);
+      notify("Draft paused.");
+    } catch (e) {
+      notify(e?.message || "Could not pause draft.", "error");
+    }
+  };
+
+  const resumeDraft = async () => {
+    if (!apiToken.get() || !activePool?.id) return;
+    try {
+      await Draft.resume(activePool.id);
+      setDraftPaused(false);
+      notify("Draft resumed.");
+    } catch (e) {
+      notify(e?.message || "Could not resume draft.", "error");
+    }
   };
 
   const copyLink = (txt) => {
@@ -2124,6 +2259,31 @@ export default function GolfPoolPro() {
                                 {isReady?"✓ Ready":"Waiting…"}
                               </p>
                             </div>
+                            {isHostOfActivePool && String(p.id) !== String(activePool.hostId) && activePool.status==="lobby" && (
+                              <button
+                                className="btn-ghost"
+                                style={{fontSize:11,padding:"6px 10px",borderRadius:9,border:"1px solid rgba(220,38,38,.25)",background:"rgba(220,38,38,.08)",color:"#B91C1C",fontWeight:700,cursor:"pointer"}}
+                                onClick={async ()=>{
+                                  const ok = window.confirm(`Remove ${p.name} from this pool?`);
+                                  if (!ok) return;
+                                  try {
+                                    await Pools.removeMember(activePool.id, p.id);
+                                    // Refresh members/presence quickly.
+                                    try {
+                                      const resp = await Pools.get(activePool.id);
+                                      const members = resp?.members || [];
+                                      setPoolMembers((prev) => ({ ...prev, [activePool.id]: members.map((m) => m.user_id) }));
+                                      setPoolReadyMap((prev) => ({ ...prev, ...Object.fromEntries(members.map((m) => [m.user_id, !!m.is_ready])) }));
+                                      setActiveLobbyUserIds(Array.isArray(resp?.activeLobbyUserIds) ? resp.activeLobbyUserIds : []);
+                                    } catch {}
+                                    notify("Participant removed.");
+                                  } catch (e) {
+                                    notify(e?.message || "Could not remove participant.", "error");
+                                  }
+                                }}>
+                                Remove
+                              </button>
+                            )}
                             {!isReady && String(p.id) === String(effectiveUserId) && (
                               <button
                                 className="btn-ready"
@@ -2211,6 +2371,57 @@ export default function GolfPoolPro() {
                           </div>
                         </>
                       )}
+                    </div>
+                    <div className="card" style={{marginTop:16}}>
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:10}}>
+                        <h4 className="h4" style={{marginBottom:0}}>Lobby Chat</h4>
+                        {isHostOfActivePool && (
+                          <button className="btn btn-ghost btn-sm" onClick={pingLobby} disabled={chatBusy}>
+                            {chatBusy ? "…" : "Ping all"}
+                          </button>
+                        )}
+                      </div>
+                      <div style={{height:220,overflowY:"auto",padding:"10px 12px",background:"var(--cream)",borderRadius:10,border:"1px solid var(--cream-2)"}}>
+                        {chatMessages.length===0 && (
+                          <p style={{fontSize:12,color:"var(--muted)"}}>No messages yet.</p>
+                        )}
+                        {chatMessages.map((m)=>{
+                          const who = participants.find(p=>String(p.id)===String(m.user_id));
+                          const name = m.type==="ping" ? "System" : (who?.name || "Player");
+                          const isMe = String(m.user_id)===String(effectiveUserId) && m.type==="chat";
+                          const ts = m.ts ? new Date(m.ts) : null;
+                          return (
+                            <div key={m.id} style={{marginBottom:8,display:"flex",justifyContent:isMe?"flex-end":"flex-start"}}>
+                              <div style={{
+                                maxWidth:"85%",
+                                padding:"8px 10px",
+                                borderRadius:12,
+                                background: m.type==="ping" ? "rgba(200,169,79,.14)" : (isMe ? "rgba(27,67,50,.12)" : "#fff"),
+                                border: m.type==="ping" ? "1px solid rgba(200,169,79,.35)" : "1px solid rgba(27,67,50,.08)",
+                              }}>
+                                <div style={{display:"flex",gap:8,alignItems:"baseline",marginBottom:2}}>
+                                  <span style={{fontSize:11,fontWeight:800,color:m.type==="ping"?"#7A5C00":"var(--forest)"}}>{name}</span>
+                                  {ts && <span style={{fontSize:10,color:"var(--muted)"}}>{ts.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</span>}
+                                </div>
+                                <div style={{fontSize:13,color:"var(--text)",whiteSpace:"pre-wrap"}}>{m.text}</div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        <div ref={chatEndRef}/>
+                      </div>
+                      <div style={{display:"flex",gap:8,marginTop:10}}>
+                        <input
+                          className="inp"
+                          value={chatText}
+                          placeholder="Message the lobby…"
+                          onChange={(e)=>setChatText(e.target.value)}
+                          onKeyDown={(e)=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendChat(); } }}
+                        />
+                        <button className="btn btn-prim" onClick={sendChat} disabled={chatBusy || !chatText.trim()}>
+                          Send
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2310,9 +2521,55 @@ export default function GolfPoolPro() {
                       </div>
                       {draftActive&&!draftDone&&(
                         <div className="clock-wrap">
-                          <ShotClock total={activePool?.shotClock||config.shotClock} time={timer}/>
+                          <ShotClock total={activePool?.shotClock||config.shotClock} time={apiToken.get() ? (serverTimeRemaining ?? timer) : timer}/>
                           <p style={{fontSize:12,color:"rgba(255,255,255,.65)"}}>On the Clock</p>
                           <p style={{fontFamily:"'Cormorant Garamond',serif",fontSize:16,fontWeight:600,color:"var(--gold-light)",textAlign:"center"}}>{currentParticipant?.name}</p>
+                          {apiToken.get() && isHostOfActivePool && (
+                            <div style={{display:"flex",gap:8,justifyContent:"center",marginTop:10}}>
+                              {!draftPaused ? (
+                                <button className="btn btn-ghost btn-sm" onClick={pauseDraft}>Pause</button>
+                              ) : (
+                                <button className="btn btn-gold btn-sm" onClick={resumeDraft}>Resume</button>
+                              )}
+                            </div>
+                          )}
+                          {(()=>{
+                            // Preview the next few drafters based on the same snakeOrder logic used for turn-taking.
+                            if (!draftActive || draftDone) return null;
+                            const upcoming = snakeOrder
+                              .slice(currentPick + 1, currentPick + 6)
+                              .map((idx) => baseParticipantOrder[idx])
+                              .filter(Boolean);
+                            if (!upcoming.length) return null;
+                            return (
+                              <div style={{marginTop:10,width:"100%"}}>
+                                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                                  <span style={{fontSize:11,color:"rgba(255,255,255,.65)",fontWeight:700,letterSpacing:"0.4px",textTransform:"uppercase"}}>Next {upcoming.length}</span>
+                                  <span style={{fontSize:11,color:"rgba(255,255,255,.55)"}}>picks</span>
+                                </div>
+                                <div style={{display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap"}}>
+                                  {upcoming.map((p) => (
+                                    <div key={p.id} title={p.name}
+                                      style={{
+                                        display:"flex",
+                                        alignItems:"center",
+                                        justifyContent:"center",
+                                        width:28,
+                                        height:28,
+                                        borderRadius:9,
+                                        background:"rgba(255,255,255,.10)",
+                                        border:"1px solid rgba(255,255,255,.12)",
+                                        color:"#fff",
+                                        fontSize:11,
+                                        fontWeight:800,
+                                      }}>
+                                      {p.avatar || (p.name||"P").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </div>
                       )}
                     </div>
@@ -2331,7 +2588,7 @@ export default function GolfPoolPro() {
                       </div>
                       <div style={{flex:1,overflowY:"auto",padding:"0 10px 10px"}}>
                         {filteredField.filter(g=>!drafted.find(d=>d.golferId===g.id)).map(g=>{
-                          const isMyTurn=draftActive&&!draftDone&&(!effectiveUserId||String(currentParticipant?.id)===String(effectiveUserId));
+                          const isMyTurn=draftActive&&!draftDone&&!draftPaused&&(!effectiveUserId||String(currentParticipant?.id)===String(effectiveUserId));
                           return (
                             <div key={g.id} className="pick-row"
                               onClick={()=>isMyTurn&&makePick(g.id)}>
@@ -2412,10 +2669,53 @@ export default function GolfPoolPro() {
 
               const poolStandings = joinedParticipants.map(p=>({
                 ...p,
-                score: getPoolScore(p.id),
                 team: getPoolTeam(p.id),
-                cutMade: getPoolTeam(p.id).filter(g=>liveScores.find(l=>l.gId===g.id)).length
-              })).sort((a,b)=>a.score-b.score);
+              })).map((p) => {
+                const teamRows = (p.team || []).map((g) => {
+                  const ls = liveScores.find((l) => l.gId === g.id);
+                  const rounds = ls ? [ls.R1, ls.R2, ls.R3, ls.R4] : [null, null, null, null];
+                  const playedRounds = rounds.filter((v) => v !== null && v !== undefined && v !== 0).length;
+                  const playedSum = rounds.filter((v) => v !== null && v !== undefined && v !== 0).reduce((a, b) => a + b, 0);
+                  const tot = ls ? (ls.R1 + ls.R2 + ls.R3 + ls.R4) : null;
+                  const birdies = ls?.birdies ? ls.birdies.reduce((a, b) => a + b, 0) : 0;
+                  const eagles = ls?.eagles ? ls.eagles.reduce((a, b) => a + b, 0) : 0;
+                  return { g, ls, tot, playedRounds, playedSum, birdies, eagles };
+                }).filter((r) => r.ls && r.tot !== null);
+
+                const cutMade = teamRows.length;
+                const eligible = cutMade >= activePool.cutLine;
+
+                const scCount = activePool.scoringGolfers;
+                const bestRows = [...teamRows].sort((a, b) => (a.tot ?? 999999) - (b.tot ?? 999999)).slice(0, scCount);
+                const bestTotals = bestRows.map((r) => r.tot ?? 999999);
+                const score = eligible ? bestTotals.reduce((s, v) => s + v, 0) : null;
+                const bonusBirdies = bestRows.reduce((s, r) => s + (r.birdies || 0), 0);
+                const bonusEagles = bestRows.reduce((s, r) => s + (r.eagles || 0), 0);
+
+                const bestPlayedRounds = bestRows.reduce((s, r) => s + (r.playedRounds || 0), 0);
+                const bestPlayedSum = bestRows.reduce((s, r) => s + (r.playedSum || 0), 0);
+                const roundsLeft = Math.max(0, (4 * scCount) - bestPlayedRounds);
+                const avgPerRound = bestPlayedRounds > 0 ? (bestPlayedSum / bestPlayedRounds) : 0;
+                const projected = eligible ? Math.round(bestPlayedSum + (avgPerRound * roundsLeft)) : null;
+
+                return { ...p, score, projected, eligible, cutMade, bestTotals, bonusBirdies, bonusEagles };
+              }).sort((a, b) => {
+                if (!!a.eligible !== !!b.eligible) return a.eligible ? -1 : 1;
+                const as = a.score ?? 999999999;
+                const bs = b.score ?? 999999999;
+                if (as !== bs) return as - bs;
+                const al = a.bestTotals || [];
+                const bl = b.bestTotals || [];
+                const len = Math.max(al.length, bl.length, activePool.scoringGolfers);
+                for (let i = 0; i < len; i++) {
+                  const av = al[i] ?? 999999999;
+                  const bv = bl[i] ?? 999999999;
+                  if (av !== bv) return av - bv;
+                }
+                if ((a.bonusEagles || 0) !== (b.bonusEagles || 0)) return (b.bonusEagles || 0) - (a.bonusEagles || 0);
+                if ((a.bonusBirdies || 0) !== (b.bonusBirdies || 0)) return (b.bonusBirdies || 0) - (a.bonusBirdies || 0);
+                return String(a.name || "").localeCompare(String(b.name || ""));
+              });
 
               return (
               <div className="page">
@@ -2495,7 +2795,18 @@ export default function GolfPoolPro() {
                 {poolTab==="teams" && (
                   <div className="g2">
                     {poolStandings.map((p,i)=>{
-                      const scores = p.team.map(g=>{const ls=liveScores.find(l=>l.gId===g.id);return ls?ls.R1+ls.R2+ls.R3+ls.R4:0;}).sort((a,b)=>a-b);
+                      const teamWithTot = p.team.map(g=>{
+                        const ls=liveScores.find(l=>l.gId===g.id);
+                        const tot=ls?ls.R1+ls.R2+ls.R3+ls.R4:null;
+                        return { g, tot, ls };
+                      });
+                      const countingIds = new Set(
+                        teamWithTot
+                          .filter(x=>x.tot!==null)
+                          .sort((a,b)=>a.tot-b.tot)
+                          .slice(0, sc)
+                          .map(x=>x.g.id)
+                      );
                       return (
                         <div key={p.id} className="card">
                           <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:14}}>
@@ -2507,12 +2818,13 @@ export default function GolfPoolPro() {
                             <div style={{textAlign:"right"}}>
                               {fmtScore(p.score)}
                               <p style={{fontSize:11,color:"var(--muted)"}}>best {sc}</p>
+                              {p.projected!==null && p.projected!==undefined && (
+                                <p style={{fontSize:11,color:"var(--muted)"}}>proj {fmtScore(p.projected)}</p>
+                              )}
                             </div>
                           </div>
-                          {p.team.map((g,gi)=>{
-                            const ls=liveScores.find(l=>l.gId===g.id);
-                            const tot=ls?ls.R1+ls.R2+ls.R3+ls.R4:null;
-                            const isCounting=tot!==null&&scores.indexOf(tot)<sc;
+                          {teamWithTot.map(({g, tot},gi)=>{
+                            const isCounting = countingIds.has(g.id);
                             return (
                               <div key={g.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:"1px solid var(--cream-2)",opacity:isCounting?1:0.5}}>
                                 {isCounting&&<span style={{fontSize:10,background:"var(--gold-pale)",color:"#7A5C00",padding:"1px 5px",borderRadius:3,fontWeight:700,flexShrink:0}}>★</span>}
@@ -2522,9 +2834,13 @@ export default function GolfPoolPro() {
                               </div>
                             );
                           })}
+                          <div style={{marginTop:10,display:"flex",justifyContent:"space-between",gap:10,fontSize:12,color:"var(--muted)"}}>
+                            <span>Birdies {p.bonusBirdies || 0}</span>
+                            <span>Eagles {p.bonusEagles || 0}</span>
+                          </div>
                           <div style={{marginTop:10,background:p.cutMade>=activePool.cutLine?"#DCFCE7":"#FEE2E2",borderRadius:7,padding:"7px 10px",display:"flex",justifyContent:"space-between",fontSize:12}}>
                             <span>{p.cutMade} made cut (need {activePool.cutLine})</span>
-                            <span style={{fontWeight:700,color:p.cutMade>=activePool.cutLine?"var(--green)":"var(--red)"}}>{p.cutMade>=activePool.cutLine?"✓ Eligible":"✗ Out"}</span>
+                            <span style={{fontWeight:700,color:p.eligible?"var(--green)":"var(--red)"}}>{p.eligible?"✓ Eligible":"✗ Out"}</span>
                           </div>
                         </div>
                       );
