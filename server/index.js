@@ -318,17 +318,96 @@ function renderTemplateUrl(template, vars) {
   return out;
 }
 
+// ─── RapidAPI (SlashGolf) quota + cache guardrails ────────────
+// RapidAPI free tiers have hard limits. We enforce a conservative in-process budget so
+// we don't burn the monthly allotment with background retries.
+const SLASHGOLF_CACHE_TTL_MS = Number(process.env.SLASHGOLF_CACHE_TTL_MS || 6 * 60 * 60 * 1000); // 6h
+const SLASHGOLF_MONTHLY_LIMIT = Number(process.env.SLASHGOLF_MONTHLY_LIMIT || 250);
+const SLASHGOLF_RATE_LIMIT_PER_MIN = Number(process.env.SLASHGOLF_RATE_LIMIT_PER_MIN || 60);
+const SLASHGOLF_MIN_INTERVAL_MS = Number(process.env.SLASHGOLF_MIN_INTERVAL_MS || 1100);
+const SLASHGOLF_STATE = {
+  monthKey: null,
+  monthCount: 0,
+  minuteKey: null,
+  minuteCount: 0,
+  nextAllowedAtMs: 0,
+};
+const SLASHGOLF_CACHE = new Map(); // url -> { ts, json }
+
+function slashgolfKeyParts() {
+  const now = new Date();
+  const y = now.getUTCFullYear();
+  const m = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(now.getUTCDate()).padStart(2, "0");
+  const hh = String(now.getUTCHours()).padStart(2, "0");
+  const mm = String(now.getUTCMinutes()).padStart(2, "0");
+  return {
+    monthKey: `${y}-${m}`,
+    minuteKey: `${y}-${m}-${d}T${hh}:${mm}`,
+  };
+}
+
+function slashgolfResetWindowsIfNeeded() {
+  const { monthKey, minuteKey } = slashgolfKeyParts();
+  if (SLASHGOLF_STATE.monthKey !== monthKey) {
+    SLASHGOLF_STATE.monthKey = monthKey;
+    SLASHGOLF_STATE.monthCount = 0;
+  }
+  if (SLASHGOLF_STATE.minuteKey !== minuteKey) {
+    SLASHGOLF_STATE.minuteKey = minuteKey;
+    SLASHGOLF_STATE.minuteCount = 0;
+  }
+}
+
+function slashgolfCanCall() {
+  slashgolfResetWindowsIfNeeded();
+  if (SLASHGOLF_STATE.monthCount >= SLASHGOLF_MONTHLY_LIMIT) {
+    return { ok: false, reason: "monthly_limit" };
+  }
+  if (SLASHGOLF_STATE.minuteCount >= SLASHGOLF_RATE_LIMIT_PER_MIN) {
+    return { ok: false, reason: "rate_limit" };
+  }
+  const now = Date.now();
+  if (now < SLASHGOLF_STATE.nextAllowedAtMs) {
+    return { ok: false, reason: "spacing", retryAfterMs: SLASHGOLF_STATE.nextAllowedAtMs - now };
+  }
+  return { ok: true };
+}
+
+function slashgolfRegisterCall() {
+  slashgolfResetWindowsIfNeeded();
+  SLASHGOLF_STATE.monthCount += 1;
+  SLASHGOLF_STATE.minuteCount += 1;
+  SLASHGOLF_STATE.nextAllowedAtMs = Date.now() + SLASHGOLF_MIN_INTERVAL_MS;
+}
+
 async function fetchRapidApiFieldPlayers(tournament) {
-  const rapidKey = process.env.RAPIDAPI_GOLF_KEY || process.env.RAPIDAPI_KEY;
-  const rapidHost = process.env.RAPIDAPI_GOLF_HOST || process.env.RAPIDAPI_HOST;
+  // Separate "RapidAPI GolfCourseAPI" (courses) from "RapidAPI SlashGolf" (tournaments/leaderboards/fields).
+  // If you only set RAPIDAPI_KEY/HOST, those will still work as a fallback.
+  const rapidKey =
+    process.env.SLASHGOLF_RAPIDAPI_KEY ||
+    process.env.RAPIDAPI_GOLF_KEY ||
+    process.env.RAPIDAPI_KEY;
+  const rapidHost =
+    process.env.SLASHGOLF_RAPIDAPI_HOST ||
+    process.env.RAPIDAPI_GOLF_HOST ||
+    process.env.RAPIDAPI_HOST;
   const rapidBase = (
+    process.env.SLASHGOLF_RAPIDAPI_BASE_URL ||
     process.env.RAPIDAPI_GOLF_BASE_URL ||
     process.env.RAPIDAPI_BASE_URL ||
     ""
   ).replace(/\/+$/, "");
-  const customTemplate = process.env.RAPIDAPI_GOLF_FIELD_URL_TEMPLATE || "";
+  const customTemplate =
+    process.env.SLASHGOLF_RAPIDAPI_FIELD_URL_TEMPLATE ||
+    process.env.RAPIDAPI_GOLF_FIELD_URL_TEMPLATE ||
+    "";
 
   if (!rapidKey || !rapidHost) return { players: [], provider: null, urlsTried: [] };
+  // Common misconfig: "rapidapi.com" is not an endpoint base.
+  if (rapidBase && /rapidapi\.com/i.test(rapidBase) && !/p\.rapidapi\.com/i.test(rapidBase)) {
+    return { players: [], provider: "RapidAPI", urlsTried: [], error: "RAPIDAPI base URL must be the API endpoint host (like https://<api>.p.rapidapi.com), not rapidapi.com." };
+  }
 
   const vars = {
     id: tournament?.id || "",
@@ -362,10 +441,32 @@ async function fetchRapidApiFieldPlayers(tournament) {
   };
 
   for (const url of dedupedUrls) {
+    // Cache hit (helps avoid burning monthly quota on repeated imports).
+    const cached = SLASHGOLF_CACHE.get(url);
+    if (cached && Date.now() - cached.ts < SLASHGOLF_CACHE_TTL_MS) {
+      const players = extractPlayersFromPayload(cached.json);
+      if (players.length) return { players, provider: "RapidAPI (cache)", url, urlsTried: dedupedUrls };
+    }
+
+    const decision = slashgolfCanCall();
+    if (!decision.ok) {
+      return {
+        players: [],
+        provider: "RapidAPI",
+        urlsTried: dedupedUrls,
+        error: decision.reason === "monthly_limit"
+          ? `RapidAPI monthly limit reached (${SLASHGOLF_MONTHLY_LIMIT}/month).`
+          : decision.reason === "rate_limit"
+            ? "RapidAPI rate limit reached (per-minute)."
+            : "RapidAPI call spacing in effect.",
+      };
+    }
     try {
+      slashgolfRegisterCall();
       const resp = await fetch(url, { headers, timeout: 12000 });
       if (!resp.ok) continue;
       const json = await resp.json();
+      SLASHGOLF_CACHE.set(url, { ts: Date.now(), json });
       const players = extractPlayersFromPayload(json);
       if (players.length) {
         return { players, provider: "RapidAPI", url, urlsTried: dedupedUrls };
