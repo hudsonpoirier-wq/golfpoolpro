@@ -595,7 +595,8 @@ const parseRecoveryTokensFromLocation = () => {
 
 /* ─── HELPERS ─── */
 const fmtScore = (s) => {
-  if(s===null||s===undefined) return <span style={{color:"#CBD5E1"}}>—</span>;
+  // Keep empty for missing/unplayed rounds so future tournaments don't prefill with "—/N/A".
+  if(s===null||s===undefined) return <span style={{color:"#CBD5E1"}}></span>;
   if(s===0) return <span className="even">E</span>;
   if(s<0) return <span className="under">{s}</span>;
   return <span className="over">+{s}</span>;
@@ -971,17 +972,18 @@ export default function GolfPoolPro() {
           putts: Number(g.putts || 0),
         })));
 
-        setLiveScores((scores||[]).map(s=>({
-          gId: s.golfer?.id || s.golfer_id,
-          R1: s.r1 ?? 0,
-          R2: s.r2 ?? 0,
-          R3: s.r3 ?? 0,
-          R4: s.r4 ?? 0,
-          pos: s.position ?? 999,
-          birdies: s.birdies || [0,0,0,0],
-          eagles: s.eagles || [0,0,0,0],
-          bogeys: s.bogeys || [0,0,0,0],
-        })));
+	        setLiveScores((scores||[]).map(s=>({
+	          gId: s.golfer?.id || s.golfer_id,
+	          // Keep missing rounds null so future tournaments don't prefill with "E".
+	          R1: s.r1 ?? null,
+	          R2: s.r2 ?? null,
+	          R3: s.r3 ?? null,
+	          R4: s.r4 ?? null,
+	          pos: s.position ?? null,
+	          birdies: s.birdies || [0,0,0,0],
+	          eagles: s.eagles || [0,0,0,0],
+	          bogeys: s.bogeys || [0,0,0,0],
+	        })));
         setLastUpdated(new Date());
       } catch {}
     };
@@ -1261,7 +1263,11 @@ export default function GolfPoolPro() {
         const state = await Draft.state(activePool.id);
         if (stopped) return;
         setDraftPaused(!!state?.paused);
-        if (typeof state?.timeRemaining === "number") setServerTimeRemaining(state.timeRemaining);
+        if (typeof state?.timeRemaining === "number") {
+          setServerTimeRemaining(state.timeRemaining);
+          // Keep a smooth UI countdown between polls without triggering auto-picks.
+          setTimer(state.timeRemaining);
+        }
       } catch {}
     };
     poll();
@@ -1367,9 +1373,20 @@ export default function GolfPoolPro() {
 
   useEffect(()=>{
     if(!draftActive||draftDone) return;
-    // Shared drafts use server-side timers + auto-skip. Prevent client-side auto-picks.
-    if (apiToken.get() && activePool?.id) return;
     const sc = activePool?.shotClock||config.shotClock;
+
+    // Shared drafts: render-only countdown (server enforces the clock + auto-skip).
+    if (apiToken.get() && activePool?.id) {
+      clearInterval(timerRef.current);
+      // timer is kept in sync with serverTimeRemaining on poll; tick down smoothly between polls.
+      if (draftPaused) return () => clearInterval(timerRef.current);
+      timerRef.current = setInterval(()=>{
+        setTimer(t => (typeof t === "number" ? Math.max(0, t - 1) : sc));
+      }, 1000);
+      return()=>clearInterval(timerRef.current);
+    }
+
+    // Local/demo drafts: client enforces clock + auto-skip.
     setTimer(sc);
     timerRef.current = setInterval(()=>{
       setTimer(t=>{
@@ -1378,7 +1395,7 @@ export default function GolfPoolPro() {
       });
     },1000);
     return()=>clearInterval(timerRef.current);
-  },[currentPick,draftActive,draftDone]);
+  },[currentPick,draftActive,draftDone,draftPaused]);
 
   const autoSkip = useCallback(()=>{
     const avail = poolTournamentField.filter(g=>!drafted.find(d=>d.golferId===g.id));
@@ -1511,7 +1528,7 @@ export default function GolfPoolPro() {
     const scores = team.map(g=>{
       const ls = sg.find(l=>l.gId===g.id);
       if(!ls) return 0;
-      return ls.R1+ls.R2+ls.R3+ls.R4;
+      return [ls.R1,ls.R2,ls.R3,ls.R4].reduce((sum,v)=>sum+(typeof v==="number"?v:0),0);
     }).sort((a,b)=>a-b);
     return scores.slice(0,sc).reduce((s,v)=>s+v,0);
   };
@@ -1627,10 +1644,24 @@ export default function GolfPoolPro() {
 
   const openPool = (pool) => {
     setActivePool(pool);
-    if(pool.status==="live") setPoolPhase("live");
-    else if(pool.status==="draft") setPoolPhase("draft");
-    else if(pool.status==="complete") setPoolPhase("live");
-    else setPoolPhase("lobby");
+    if(pool.status==="live") {
+      setPoolPhase("live");
+      setDraftActive(false);
+      setDraftDone(false);
+    } else if(pool.status==="draft") {
+      setPoolPhase("draft");
+      setDraftActive(true);
+      setDraftDone(false);
+      setServerTimeRemaining(null);
+    } else if(pool.status==="complete") {
+      setPoolPhase("live");
+      setDraftActive(false);
+      setDraftDone(false);
+    } else {
+      setPoolPhase("lobby");
+      setDraftActive(false);
+      setDraftDone(false);
+    }
     setPoolReadyMap({});
     setView("pool");
   };
@@ -1944,7 +1975,11 @@ export default function GolfPoolPro() {
       };
       joinPool(userId, mappedPool);
       setActivePool(mappedPool);
-      setPoolPhase(mappedPool.status==="live"?"live":mappedPool.status==="draft"?"draft":"lobby");
+      const phase = mappedPool.status==="live" ? "live" : mappedPool.status==="draft" ? "draft" : "lobby";
+      setPoolPhase(phase);
+      setDraftActive(phase === "draft");
+      setDraftDone(false);
+      if (phase === "draft") setServerTimeRemaining(null);
       setView("pool");
       setInviteView(false);
       setAuthSuccess("");
@@ -2590,25 +2625,21 @@ export default function GolfPoolPro() {
             )}
 
             {/* ── DRAFT PHASE ── */}
-                {poolPhase==="draft" && (
-                  <div className="page-wide">
-                    {!draftActive && !draftDone && (
-                      <div style={{textAlign:"center",padding:"80px 40px"}}>
-                        <p style={{fontSize:56,marginBottom:16}}>🏌️</p>
-                        <h2 className="h2" style={{marginBottom:10}}>Ready to Draft</h2>
-                        <p className="sub" style={{marginBottom:28}}>{poolTournamentField.length} golfers available · Best {activePool.scoringGolfers} of {activePool.teamSize} count</p>
-                        {poolTournamentField.length===0 && (
-                          <p style={{fontSize:13,color:"var(--red)",marginBottom:14}}>
-                            No live field is loaded for this tournament yet.
-                          </p>
-                        )}
-                        {(!apiToken.get() || isHostOfActivePool) ? (
-                          <button className="btn btn-gold" style={{fontSize:16,padding:"14px 32px"}} onClick={startDraft} disabled={poolTournamentField.length===0}>Start Draft →</button>
-                        ) : (
-                          <p className="sub" style={{marginTop:12}}>Waiting for host to start the draft…</p>
-                        )}
-                      </div>
+            {poolPhase==="draft" && (
+              <div className="page-wide">
+                {!apiToken.get() && !draftActive && !draftDone && (
+                  <div style={{textAlign:"center",padding:"80px 40px"}}>
+                    <p style={{fontSize:56,marginBottom:16}}>🏌️</p>
+                    <h2 className="h2" style={{marginBottom:10}}>Ready to Draft</h2>
+                    <p className="sub" style={{marginBottom:28}}>{poolTournamentField.length} golfers available · Best {activePool.scoringGolfers} of {activePool.teamSize} count</p>
+                    {poolTournamentField.length===0 && (
+                      <p style={{fontSize:13,color:"var(--red)",marginBottom:14}}>
+                        No live field is loaded for this tournament yet.
+                      </p>
                     )}
+                    <button className="btn btn-gold" style={{fontSize:16,padding:"14px 32px"}} onClick={startDraft} disabled={poolTournamentField.length===0}>Start Draft →</button>
+                  </div>
+                )}
                 {draftDone && (
                   <div style={{textAlign:"center",padding:"60px 40px"}}>
                     <p style={{fontSize:56,marginBottom:14}}>🎉</p>
