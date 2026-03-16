@@ -403,10 +403,25 @@ async function fetchRapidApiFieldPlayers(tournament) {
     process.env.RAPIDAPI_GOLF_FIELD_URL_TEMPLATE ||
     "";
 
-  if (!rapidKey || !rapidHost) return { players: [], provider: null, urlsTried: [] };
+  if (!rapidKey || !rapidHost) {
+    return {
+      players: [],
+      provider: null,
+      urlsTried: [],
+      error: "RapidAPI not configured (missing SLASHGOLF_RAPIDAPI_KEY and/or SLASHGOLF_RAPIDAPI_HOST).",
+    };
+  }
   // Common misconfig: "rapidapi.com" is not an endpoint base.
   if (rapidBase && /rapidapi\.com/i.test(rapidBase) && !/p\.rapidapi\.com/i.test(rapidBase)) {
     return { players: [], provider: "RapidAPI", urlsTried: [], error: "RAPIDAPI base URL must be the API endpoint host (like https://<api>.p.rapidapi.com), not rapidapi.com." };
+  }
+  if (!rapidBase) {
+    return {
+      players: [],
+      provider: "RapidAPI",
+      urlsTried: [],
+      error: "RapidAPI configured but missing SLASHGOLF_RAPIDAPI_BASE_URL (expected https://live-golf-data.p.rapidapi.com).",
+    };
   }
 
   const vars = {
@@ -724,10 +739,12 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
     let players = [];
     let source = "unknown";
     let importedEventId = null;
+    const debug = [];
 
     // 1) Sportradar first (if configured)
     if (!players.length) {
       const sr = await fetchSportradarFieldPlayers(tournament);
+      debug.push({ provider: "Sportradar", url: sr.url || null, urlsTried: sr.urlsTried || [], count: sr.players?.length || 0, error: sr.error || null });
       if (sr.players?.length) {
         players = sr.players;
         source = "Sportradar";
@@ -737,6 +754,7 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
     // 2) BallDontLie PGA
     if (!players.length) {
       const bdl = await fetchBallDontLieFieldPlayers(tournament);
+      debug.push({ provider: "BallDontLie", url: bdl.url || null, urlsTried: bdl.urlsTried || [], count: bdl.players?.length || 0, error: bdl.error || null });
       if (bdl.players?.length) {
         players = bdl.players;
         source = bdl.provider || "BallDontLie";
@@ -765,11 +783,13 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
         source = source === "unknown" ? "TheSportsDB" : `${source}+TheSportsDB`;
         importedEventId = String(eventId);
       }
+      debug.push({ provider: "TheSportsDB", url: null, urlsTried: urls, count: players.length, error: players.length ? null : "No players in TheSportsDB payload." });
     }
 
     // 4) RapidAPI fallback
     if (!players.length) {
       const rapid = await fetchRapidApiFieldPlayers(tournament);
+      debug.push({ provider: rapid.provider || "RapidAPI", url: rapid.url || null, urlsTried: rapid.urlsTried || [], count: rapid.players?.length || 0, error: rapid.error || null });
       if (rapid.players?.length) {
         players = rapid.players;
         source = rapid.provider || "RapidAPI";
@@ -780,6 +800,7 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
     if (!players.length) {
       return res.status(404).json({
         error: "No player list found from BallDontLie, Sportradar, TheSportsDB, or RapidAPI for this tournament yet.",
+        debug,
       });
     }
 
