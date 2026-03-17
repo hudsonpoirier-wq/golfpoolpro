@@ -1215,6 +1215,33 @@ async function fetchDataGolfFieldPlayers(tournament) {
     try {
       const json = await datagolfFetchJson(url);
 
+      // DataGolf sometimes returns a single event object with a top-level `field` array.
+      // Treat that as the "current/upcoming event" feed.
+      if (json && typeof json === "object" && !Array.isArray(json) && Array.isArray(json.field)) {
+        const evNameRaw = json.event_name || json.eventName || json.name || "";
+        const evName = normKey(evNameRaw);
+        const target = normKey(tournament?.name || "");
+        // Only accept when it clearly matches the tournament we're importing.
+        if (evNameRaw && tournament?.name && strongNameMatch(evNameRaw, tournament.name)) {
+          const rawList = json.field;
+          const players = coercePlayers(rawList);
+          if (players.length) {
+            const enriched = await enrichPlayersFromDataGolfRefs(players);
+            const evId = json.event_id ?? json.eventId ?? json.dg_event_id ?? json.dgEventId ?? json.id ?? null;
+            return { players: enriched, provider: "DataGolf", url, urlsTried, event_id: evId != null ? String(evId) : null };
+          }
+        } else if (target && evName && (evName.includes(target) || target.includes(evName))) {
+          // Slightly weaker match for abbreviation/punctuation differences.
+          const players = coercePlayers(json.field);
+          if (players.length) {
+            const enriched = await enrichPlayersFromDataGolfRefs(players);
+            const evId = json.event_id ?? json.eventId ?? json.dg_event_id ?? json.dgEventId ?? json.id ?? null;
+            return { players: enriched, provider: "DataGolf", url, urlsTried, event_id: evId != null ? String(evId) : null };
+          }
+        }
+        // If it doesn't match, keep trying other tours.
+      }
+
       // Flat rows form: group by event first.
       if (Array.isArray(json) && json.length && looksLikeFlatPlayerRow(json[0])) {
         const flat = pickBestPlayersFromFlatRows(json);
@@ -2132,6 +2159,26 @@ app.get("/api/admin/datagolf/field-updates-debug", async (req, res) => {
         shape: "flat_rows",
         url: redactUrlSecrets(url),
         events,
+      });
+    }
+
+    // Some DataGolf responses are a single event object with a top-level `field` array.
+    // (Rather than an array of events.)
+    if (json && typeof json === "object" && !Array.isArray(json) && Array.isArray(json.field)) {
+      return res.json({
+        provider: "DataGolf",
+        tour,
+        shape: "single_event",
+        url: redactUrlSecrets(url),
+        event: {
+          event_id: json.event_id ?? json.eventId ?? json.dg_event_id ?? json.dgEventId ?? json.id ?? null,
+          event_name: json.event_name ?? json.eventName ?? json.name ?? null,
+          start_date: json.date_start ?? json.start_date ?? json.startDate ?? null,
+          end_date: json.date_end ?? json.end_date ?? json.endDate ?? null,
+          count: Array.isArray(json.field) ? json.field.length : 0,
+          last_updated: json.last_updated || null,
+        },
+        topLevelKeys: Object.keys(json).slice(0, 30),
       });
     }
 
