@@ -1048,7 +1048,7 @@ async function fetchDataGolfFieldPlayers(tournament) {
 
   const coercePlayers = (arr) => (arr || [])
     .map((p) => ({
-      id: Number(p.dg_id || p.dgid || p.datagolf_id || p.player_id) || null,
+      id: Number(p.dg_id || p.dgid || p.datagolf_id || p.player_id || p.id) || null,
       name: normalizePlayerName(p.player_name || p.name || p.full_name || p.player || ""),
       country: p.country || p.nationality || null,
       world_rank: Number(p.owgr || p.owgr_rank || p.world_rank || p.rank) || null,
@@ -1065,7 +1065,10 @@ async function fetchDataGolfFieldPlayers(tournament) {
         // Candidate player list if objects look like players.
         if (x.length && typeof x[0] === "object") {
           const sample = x.slice(0, 10);
-          const looksLikePlayers = sample.some((p) => p && typeof p === "object" && (p.player_name || p.full_name || p.name || p.player));
+          const nameCount = sample.filter((p) => p && typeof p === "object" && (p.player_name || p.full_name || p.name || p.player)).length;
+          const idCount = sample.filter((p) => Number(p?.dg_id ?? p?.dgid ?? p?.datagolf_id ?? p?.player_id ?? p?.id) > 0).length;
+          // Some DataGolf payloads provide dg_id without names; accept id-only "player arrays" too.
+          const looksLikePlayers = nameCount > 0 || idCount >= 6;
           if (looksLikePlayers && x.length > best.length) best = x;
         }
         for (const el of x.slice(0, 30)) walk(el, depth + 1);
@@ -1090,7 +1093,7 @@ async function fetchDataGolfFieldPlayers(tournament) {
   const getRowEventDate = (r) => r?.start_date || r?.startDate || r?.event_start_date || r?.date || r?.start || r?.starts_at || "";
   const looksLikeFlatPlayerRow = (r) => {
     if (!r || typeof r !== "object") return false;
-    const hasPlayer = !!(r.player_name || r.full_name || r.player || r.name);
+    const hasPlayer = !!(r.player_name || r.full_name || r.player || r.name || (Number(r.dg_id ?? r.dgid ?? r.datagolf_id ?? r.player_id ?? r.id) > 0));
     const hasEvent = !!(r.event_name || r.eventName || r.event_id || r.eventId || r.tournament_id || r.tournamentId);
     return hasPlayer && hasEvent;
   };
@@ -2039,7 +2042,13 @@ app.get("/api/admin/datagolf/field-updates-debug", async (req, res) => {
     const json = await datagolfFetchJson(url);
 
     // Best-effort: detect "flat rows" vs event objects.
-    const isFlatRows = Array.isArray(json) && json.length && typeof json[0] === "object" && (json[0].player_name || json[0].name) && (json[0].event_id || json[0].event_name);
+    const isFlatRows =
+      Array.isArray(json) &&
+      json.length &&
+      typeof json[0] === "object" &&
+      // Allow id-only player rows (some feeds omit names).
+      (json[0].player_name || json[0].name || Number(json[0].dg_id ?? json[0].dgid ?? json[0].datagolf_id ?? json[0].player_id ?? json[0].id) > 0) &&
+      (json[0].event_id || json[0].event_name);
 
     const rows = [];
     const pushEv = (ev, players) => {
