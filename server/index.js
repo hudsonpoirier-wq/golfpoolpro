@@ -1046,6 +1046,8 @@ async function fetchDataGolfFieldPlayers(tournament) {
   }
   if (scheduleEventId && !scheduleEventName) scheduleEventName = tournament?.name || null;
 
+  const year = String(tournament?.start_date || "").slice(0, 4) || String(new Date().getUTCFullYear());
+
   const coercePlayers = (arr) => (arr || [])
     .map((p) => ({
       id: Number(p.dg_id || p.dgid || p.datagolf_id || p.player_id || p.id) || null,
@@ -1272,6 +1274,56 @@ async function fetchDataGolfFieldPlayers(tournament) {
       }
     } catch {}
   }
+
+  // DataGolf sometimes has a full projected field available via predictions endpoints
+  // before `field-updates` is populated. This avoids scraping (which can be captcha-blocked).
+  // We only use this as a fallback because the response shapes vary by feed.
+  try {
+    // Prefer a stable DataGolf event_id if we have one (dg_<event_id>).
+    const rawEventId = scheduleEventId || (String(tournament?.id || "").startsWith("dg_") ? String(tournament.id).slice(3) : null);
+    const eventId = rawEventId && !/^\d{4}_[0-9a-f]{12}$/i.test(String(rawEventId)) ? String(rawEventId).trim() : null;
+
+    const predUrls = [];
+    if (eventId) {
+      predUrls.push(
+        `${DATAGOLF_BASE_URL}/preds/pre-tournament-archive?event_id=${encodeURIComponent(eventId)}&year=${encodeURIComponent(year)}&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`,
+        `${DATAGOLF_BASE_URL}/preds/pre-tournament-archive?event_id=${encodeURIComponent(eventId)}&year=${encodeURIComponent(year)}&odds_format=percent&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`
+      );
+    }
+    // Last resort: "next tournament" prediction feed for common tours.
+    predUrls.push(
+      `${DATAGOLF_BASE_URL}/preds/pre-tournament?tour=pga&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`,
+      `${DATAGOLF_BASE_URL}/preds/pre-tournament?tour=opp&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`,
+      `${DATAGOLF_BASE_URL}/preds/pre-tournament?tour=euro&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`
+    );
+
+    for (const u of predUrls) {
+      urlsTried.push(u);
+      let json = null;
+      try {
+        json = await datagolfFetchJson(u);
+      } catch {
+        continue;
+      }
+
+      // Heuristic: if this is an archive feed for a specific event, ensure it matches our tournament name when possible.
+      const payloadEventName =
+        json?.event_name || json?.eventName || json?.tournament_name || json?.tournamentName || json?.name || null;
+      if (payloadEventName && tournament?.name && !strongNameMatch(payloadEventName, tournament.name)) {
+        // Some feeds can return a different event if the event_id/year pairing is wrong; ignore.
+        continue;
+      }
+
+      const candidates =
+        pickFirstArray(json, ["preds", "predictions", "data", "players", "field", "rows", "results"]) ||
+        (Array.isArray(json) ? json : []);
+      const players = coercePlayers(candidates);
+      if (players.length >= 50) {
+        const enriched = await enrichPlayersFromDataGolfRefs(players);
+        return { players: enriched, provider: "DataGolf (preds)", url: u, urlsTried, event_id: eventId || null };
+      }
+    }
+  } catch {}
 
   // Majors: DataGolf sometimes publishes projected majors fields via the site page earlier than `field-updates`.
   // As a last resort, scrape the major fields page for names and map them back to DG ids via get-player-list.
