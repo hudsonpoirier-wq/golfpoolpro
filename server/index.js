@@ -805,19 +805,43 @@ async function fetchDataGolfMajorFieldPlayers(tournament) {
       };
     }
 
-    // Try: Next.js/SSR JSON blob.
+    // Try: Inline "field" JSON array (DataGolf embeds structured data in a script tag).
     let playerObjs = [];
-    const nextDataMatch = html.match(/<script[^>]+id=\"__NEXT_DATA__\"[^>]*>([\s\S]*?)<\/script>/i);
-    if (nextDataMatch && nextDataMatch[1]) {
-      try {
-        const json = JSON.parse(nextDataMatch[1]);
-        const projected = pickProjectedFieldArrayFromNextData(major, json);
-        if (Array.isArray(projected) && projected.length) playerObjs = projected;
-      } catch {}
+    {
+      const fieldIdx = html.indexOf('"field"');
+      if (fieldIdx >= 0) {
+        const bracketStart = html.indexOf("[", fieldIdx);
+        if (bracketStart >= 0 && bracketStart - fieldIdx < 10) {
+          try {
+            let depth = 0;
+            let endIdx = bracketStart;
+            for (let i = bracketStart; i < Math.min(html.length, bracketStart + 500000); i++) {
+              if (html[i] === "[") depth++;
+              else if (html[i] === "]") depth--;
+              if (depth === 0) { endIdx = i; break; }
+            }
+            const fieldArr = JSON.parse(html.slice(bracketStart, endIdx + 1));
+            if (Array.isArray(fieldArr) && fieldArr.length > 0 && fieldArr[0]?.player_name) {
+              playerObjs = fieldArr;
+            }
+          } catch {}
+        }
+      }
+    }
+
+    // Try: Next.js/SSR JSON blob.
+    if (!playerObjs.length) {
+      const nextDataMatch = html.match(/<script[^>]+id=\"__NEXT_DATA__\"[^>]*>([\s\S]*?)<\/script>/i);
+      if (nextDataMatch && nextDataMatch[1]) {
+        try {
+          const json = JSON.parse(nextDataMatch[1]);
+          const projected = pickProjectedFieldArrayFromNextData(major, json);
+          if (Array.isArray(projected) && projected.length) playerObjs = projected;
+        } catch {}
+      }
     }
 
     // Try: Next.js data route (works even when the SSR HTML doesn't include the full dataset).
-    // Example: https://datagolf.com/_next/data/<buildId>/major-fields.json?major=masters
     if (!playerObjs.length) {
       const buildIdMatch =
         html.match(/\"buildId\"\s*:\s*\"([^\"]+)\"/i) ||
@@ -838,34 +862,12 @@ async function fetchDataGolfMajorFieldPlayers(tournament) {
       }
     }
 
-    const sliceProjectedSection = (s) => {
-      const lower = String(s || "").toLowerCase();
-      const start = lower.indexOf("projected field");
-      if (start < 0) return String(s || "");
-      const tails = [
-        "best (eligible) players not in field",
-        "eligible players not in field",
-        "bubble watch",
-        "recent movements",
-        "recent locks",
-        "recent outs",
-      ];
-      let end = -1;
-      for (const t of tails) {
-        const i = lower.indexOf(t, start + 20);
-        if (i >= 0 && (end < 0 || i < end)) end = i;
-      }
-      if (end < 0) end = Math.min(lower.length, start + 220000);
-      return String(s || "").slice(start, end);
-    };
-
-    // Try: JSON-ish patterns in page source.
+    // Try: JSON-ish player_name patterns in page source.
     if (!playerObjs.length) {
       const matches = [];
-      const window = sliceProjectedSection(html);
       const re = /\"player_name\"\s*:\s*\"([^\"]+)\"/g;
       let m = null;
-      while ((m = re.exec(window))) {
+      while ((m = re.exec(html))) {
         if (m[1]) matches.push({ player_name: m[1] });
         if (matches.length > 2000) break;
       }
