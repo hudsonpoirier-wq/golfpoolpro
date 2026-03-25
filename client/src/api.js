@@ -18,7 +18,7 @@ const env = (() => {
 const API_BASE =
   env.VITE_API_URL ||
   env.REACT_APP_API_URL ||
-  "https://api.mygolfpoolpro.com";
+  "https://golfpoolpro.onrender.com";
 
 const REQUEST_TIMEOUT_MS = Number(env.VITE_API_TIMEOUT_MS || env.REACT_APP_API_TIMEOUT_MS || 15000);
 
@@ -143,7 +143,7 @@ export const Auth = {
     // Use configured site URL when available, else fall back to current browser origin.
     post("/api/auth/forgot-password", {
       email,
-      redirectTo: `${env.VITE_SITE_URL || env.REACT_APP_SITE_URL || (typeof window !== "undefined" ? window.location.origin : "http://localhost:5173")}/reset-password`,
+      redirectTo: `${env.VITE_SITE_URL || env.REACT_APP_SITE_URL || (typeof window !== "undefined" ? window.location.origin : "https://golfpoolpro.vercel.app")}/reset-password`,
     }, false),
 
   /** Reset password (called after user clicks email link — token already set) */
