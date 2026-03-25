@@ -794,7 +794,9 @@ async function fetchDataGolfMajorFieldPlayers(tournament) {
   try {
     const html = await datagolfFetchText(url);
     const lowerHtml = String(html || "").toLowerCase();
-    if (/(cloudflare|cf-ray|attention required|captcha|verify you are human)/i.test(lowerHtml)) {
+    // Check for Cloudflare challenge pages, but ignore CDN references like cdnjs.cloudflare.com
+    const strippedHtml = lowerHtml.replace(/cdnjs\.cloudflare\.com/g, "");
+    if (/(cloudflare|cf-ray|attention required|captcha|verify you are human)/i.test(strippedHtml) && lowerHtml.length < 50000) {
       return {
         players: [],
         provider: "DataGolf major-fields (scrape)",
