@@ -1835,6 +1835,12 @@ async function autoSeedUpcomingFields() {
     } catch {}
     if (hasRealScores) continue;
 
+    // Refresh fields for tournaments starting within 14 days even if they already have a field,
+    // since projected fields change frequently as players commit/withdraw.
+    const daysUntilStart = (new Date(t.start_date) - new Date()) / (1000 * 60 * 60 * 24);
+    const hasField = Number(t.field_size || 0) > 0;
+    if (hasField && daysUntilStart > 14) continue; // skip far-out tournaments that already have a field
+
     try {
       const dg = await fetchDataGolfFieldPlayers(t);
       if (!dg.players?.length) continue;

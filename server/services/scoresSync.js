@@ -11,6 +11,51 @@ const BALLDONTLIE_PGA_BASE = (process.env.BALLDONTLIE_PGA_BASE_URL || "https://a
 const DATAGOLF_API_KEY = process.env.DATAGOLF_API_KEY || "";
 const DATAGOLF_BASE_URL = (process.env.DATAGOLF_BASE_URL || "https://feeds.datagolf.com").replace(/\/+$/, "");
 
+// DataGolf rate-limiter + cache (local to scoresSync to avoid coupling with index.js).
+// 45 calls/min with 1.5s spacing; cache results for 60s (sync runs every 30s, so one
+// fresh call per minute at most).
+const DG_SYNC_CACHE = new Map();          // url -> { ts, json }
+const DG_SYNC_CACHE_TTL_MS = 60 * 1000;  // 60s — score sync runs every 30s
+const DG_SYNC_STATE = { minuteKey: null, minuteCount: 0, nextAllowedAtMs: 0 };
+
+function dgSyncMinuteKey() {
+  const d = new Date();
+  return `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}-${d.getUTCHours()}-${d.getUTCMinutes()}`;
+}
+
+function dgSyncCanCall() {
+  const k = dgSyncMinuteKey();
+  if (DG_SYNC_STATE.minuteKey !== k) {
+    DG_SYNC_STATE.minuteKey = k;
+    DG_SYNC_STATE.minuteCount = 0;
+  }
+  if (DG_SYNC_STATE.minuteCount >= 45) return false;
+  if (Date.now() < DG_SYNC_STATE.nextAllowedAtMs) return false;
+  return true;
+}
+
+function dgSyncRegisterCall() {
+  const k = dgSyncMinuteKey();
+  if (DG_SYNC_STATE.minuteKey !== k) {
+    DG_SYNC_STATE.minuteKey = k;
+    DG_SYNC_STATE.minuteCount = 0;
+  }
+  DG_SYNC_STATE.minuteCount += 1;
+  DG_SYNC_STATE.nextAllowedAtMs = Date.now() + 1500;
+}
+
+async function dgSyncFetchJson(url) {
+  const cached = DG_SYNC_CACHE.get(url);
+  if (cached && Date.now() - cached.ts < DG_SYNC_CACHE_TTL_MS) return cached.json;
+  if (!dgSyncCanCall()) return null;  // silently skip — this is a fallback
+  dgSyncRegisterCall();
+  const resp = await fetch(url, { timeout: 12000 });
+  if (!resp.ok) throw new Error(`DataGolf returned ${resp.status}`);
+  const json = await resp.json();
+  DG_SYNC_CACHE.set(url, { ts: Date.now(), json });
+  return json;
+}
+
 // Alternative free API (no key required, less detail):
 const THE_SPORTS_DB_KEY = process.env.THE_SPORTS_DB_KEY || "3";
 const THE_SPORTS_DB = `https://www.thesportsdb.com/api/v1/json/${THE_SPORTS_DB_KEY}`;
@@ -20,6 +65,7 @@ const SCORE_PROVIDER = (
 ).toUpperCase();
 const USE_SPORTSDATAIO = String(process.env.USE_SPORTSDATAIO || "").toLowerCase() === "true";
 const AUTO_EVENT_MAP = {};
+const AUTO_SDIO_MAP = {};
 
 function parseMap(raw) {
   if (!raw) return {};
@@ -32,15 +78,8 @@ function parseMap(raw) {
 
 // Map internal IDs (t1, t4, etc.) -> TheSportsDB event IDs
 const THE_SPORTS_DB_EVENT_MAP = parseMap(process.env.THE_SPORTS_DB_EVENT_MAP);
-// Map internal IDs (t1, t4, etc.) -> SportsDataIO tournament IDs
-const SPORTS_DATA_TOURNAMENT_MAP = {
-  t4: 20508,
-  t8: 20512,
-  t11: 20516,
-  t15: 20520,
-  t1: 20505,
-  ...parseMap(process.env.SPORTS_DATA_TOURNAMENT_MAP),
-};
+// Optional env override for SportsDataIO mappings (e.g. '{"t4":20508}')
+const SPORTS_DATA_TOURNAMENT_MAP_OVERRIDE = parseMap(process.env.SPORTS_DATA_TOURNAMENT_MAP);
 
 /**
  * Main sync function — called by cron every 30s
@@ -105,17 +144,26 @@ async function fetchScores(internalTournamentId, supabase) {
     if (bdl?.length) return bdl;
     const tsdbFallback = await fetchTheSportsDbScores(internalTournamentId, supabase);
     if (tsdbFallback?.length) return tsdbFallback;
-    return USE_SPORTSDATAIO ? fetchSportsDataScores(internalTournamentId) : null;
+    if (USE_SPORTSDATAIO) {
+      const sd = await fetchSportsDataScores(internalTournamentId, supabase);
+      if (sd?.length) return sd;
+    }
+    return fetchDataGolfLiveScores(internalTournamentId, supabase);
   }
   if (USE_SPORTSDATAIO && SCORE_PROVIDER === "SPORTSDATAIO") {
-    const sportsData = await fetchSportsDataScores(internalTournamentId);
+    const sportsData = await fetchSportsDataScores(internalTournamentId, supabase);
     if (sportsData?.length) return sportsData;
-    return fetchTheSportsDbScores(internalTournamentId, supabase);
+    const tsdb = await fetchTheSportsDbScores(internalTournamentId, supabase);
+    if (tsdb?.length) return tsdb;
+    return fetchDataGolfLiveScores(internalTournamentId, supabase);
   }
   const theSportsDb = await fetchTheSportsDbScores(internalTournamentId, supabase);
   if (theSportsDb?.length) return theSportsDb;
-  if (!USE_SPORTSDATAIO) return null;
-  return fetchSportsDataScores(internalTournamentId);
+  if (USE_SPORTSDATAIO) {
+    const sd = await fetchSportsDataScores(internalTournamentId, supabase);
+    if (sd?.length) return sd;
+  }
+  return fetchDataGolfLiveScores(internalTournamentId, supabase);
 }
 
 function normalizeScoreRow(raw) {
@@ -355,11 +403,237 @@ async function fetchBallDontLieScores(internalTournamentId, supabase) {
   return null;
 }
 
-async function fetchSportsDataScores(internalTournamentId) {
+// ─── DataGolf live score fallback ───────────────────────────────────────
+// Uses two endpoints:
+//   1. /preds/in-play  — in-play predictions with current scores/position
+//   2. /field-updates  — field data that includes per-round scores
+// Both are tried; in-play is preferred because it has live position + thru data.
+
+function normalizeDataGolfScoreRow(raw) {
+  if (!raw) return null;
+
+  // Player identification — DataGolf uses dg_id as primary key
+  const golferId = Number(
+    raw.dg_id ?? raw.dgid ?? raw.datagolf_id ?? raw.player_id ?? raw.id ?? 0
+  );
+  if (!Number.isFinite(golferId) || golferId <= 0) return null;
+
+  const playerName = String(
+    raw.player_name ?? raw.full_name ?? raw.name ?? raw.player ?? ""
+  ).trim();
+  if (!playerName) return null;
+
+  const country = raw.country ?? raw.nationality ?? raw.country_code ?? null;
+
+  // Position — in-play uses "current_pos"; field-updates may use "position"
+  const posRaw = raw.current_pos ?? raw.position ?? raw.pos ?? raw.rank ?? raw.fin_text ?? null;
+  let position = 999;
+  if (posRaw != null) {
+    // DataGolf positions can be strings like "T5", "1", "CUT", "WD"
+    const numMatch = String(posRaw).match(/(\d+)/);
+    if (numMatch) position = Number(numMatch[1]);
+  }
+
+  // Round scores — in-play endpoint nests them differently than field-updates
+  const rounds = raw.rounds ?? raw.round_scores ?? null;
+  let r1 = null, r2 = null, r3 = null, r4 = null;
+
+  if (Array.isArray(rounds)) {
+    // Array of round score numbers or objects
+    const rv = (idx) => {
+      const v = rounds[idx];
+      if (v == null) return null;
+      if (typeof v === "number") return v;
+      const n = Number(v.score ?? v.strokes ?? v.total ?? v);
+      return Number.isFinite(n) ? n : null;
+    };
+    r1 = rv(0); r2 = rv(1); r3 = rv(2); r4 = rv(3);
+  } else if (rounds && typeof rounds === "object") {
+    // Object keyed by round number: { "1": 68, "2": 71, ... }
+    const rv = (k) => { const n = Number(rounds[k]); return Number.isFinite(n) ? n : null; };
+    r1 = rv("1") ?? rv(1); r2 = rv("2") ?? rv(2);
+    r3 = rv("3") ?? rv(3); r4 = rv("4") ?? rv(4);
+  } else {
+    // Flat fields: r1/r2/r3/r4 or round1/round2/round3/round4
+    const rv = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
+    r1 = rv(raw.r1 ?? raw.round1 ?? raw.R1 ?? raw.Round1);
+    r2 = rv(raw.r2 ?? raw.round2 ?? raw.R2 ?? raw.Round2);
+    r3 = rv(raw.r3 ?? raw.round3 ?? raw.R3 ?? raw.Round3);
+    r4 = rv(raw.r4 ?? raw.round4 ?? raw.R4 ?? raw.Round4);
+  }
+
+  // Total score to par — useful when individual round scores aren't available
+  const totalToPar = Number(
+    raw.total ?? raw.total_to_par ?? raw.score ?? raw.total_score ?? raw.current_score ?? NaN
+  );
+  // If we have no round scores at all but have a total, put it in the latest round slot
+  // so the standings can still reflect live movement.
+  if (r1 == null && r2 == null && r3 == null && r4 == null && Number.isFinite(totalToPar)) {
+    const curRound = Number(raw.current_round ?? raw.round ?? raw.thru_round ?? 0);
+    if (curRound === 1) r1 = totalToPar;
+    else if (curRound === 2) r2 = totalToPar;
+    else if (curRound === 3) r3 = totalToPar;
+    else r4 = totalToPar;
+  }
+
+  // Status mapping: active / cut / wd
+  const statusRaw = String(raw.status ?? raw.fin_text ?? raw.current_pos ?? "").toLowerCase();
+  let status = "active";
+  if (statusRaw.includes("cut") || statusRaw === "mc") status = "cut";
+  else if (statusRaw.includes("wd") || statusRaw === "withdrawn") status = "wd";
+
+  // Thru (holes completed in current round)
+  const thruRaw = raw.thru ?? raw.holes_completed ?? raw.today_holes ?? null;
+  let thru = null;
+  if (thruRaw != null) {
+    if (String(thruRaw).toUpperCase() === "F") thru = 18;
+    else {
+      const n = Number(thruRaw);
+      thru = Number.isFinite(n) ? n : null;
+    }
+  }
+
+  return {
+    golferId,
+    playerName,
+    country,
+    position,
+    r1,
+    r2,
+    r3,
+    r4,
+    status,
+    thru,
+    birdies: [0, 0, 0, 0],
+    eagles: [0, 0, 0, 0],
+    bogeys: [0, 0, 0, 0],
+  };
+}
+
+/**
+ * Extract an array of player rows from a DataGolf JSON response, handling
+ * the various payload shapes the API may return.
+ */
+function extractDataGolfPlayerArray(json) {
+  if (!json || typeof json !== "object") return [];
+  if (Array.isArray(json)) return json;
+  const candidateKeys = [
+    "data", "leaderboard", "players", "field", "results",
+    "live_stats", "scorecard", "in_play", "entries",
+  ];
+  for (const k of candidateKeys) {
+    if (Array.isArray(json[k]) && json[k].length) return json[k];
+  }
+  // Single-event wrapper: { event_name: "...", field: [...] }
+  for (const v of Object.values(json)) {
+    if (Array.isArray(v) && v.length > 5) return v;
+  }
+  return [];
+}
+
+async function fetchDataGolfLiveScores(internalTournamentId, supabase) {
+  if (!DATAGOLF_API_KEY) return null;
+
+  // 1. Try the in-play predictions endpoint (best live data)
+  const inPlayUrl = `${DATAGOLF_BASE_URL}/preds/in-play?file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
+  try {
+    const json = await dgSyncFetchJson(inPlayUrl);
+    if (json) {
+      const players = extractDataGolfPlayerArray(json);
+      const rows = players.map(normalizeDataGolfScoreRow).filter(Boolean);
+      if (rows.length) {
+        console.log(`DataGolf in-play fallback returned ${rows.length} scores`);
+        return rows;
+      }
+    }
+  } catch (e) {
+    console.warn(`DataGolf in-play fetch failed: ${e.message}`);
+  }
+
+  // 2. Fallback to field-updates which may include current round scores
+  const toursToTry = ["pga", "euro", "kft", "opp", "alt"];
+  for (const tour of toursToTry) {
+    const fieldUrl = `${DATAGOLF_BASE_URL}/field-updates?tour=${encodeURIComponent(tour)}&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
+    try {
+      const json = await dgSyncFetchJson(fieldUrl);
+      if (!json) continue;  // rate-limited, skip
+      const players = extractDataGolfPlayerArray(json);
+      const rows = players.map(normalizeDataGolfScoreRow).filter(Boolean);
+      if (rows.length) {
+        console.log(`DataGolf field-updates (${tour}) fallback returned ${rows.length} scores`);
+        return rows;
+      }
+    } catch (e) {
+      console.warn(`DataGolf field-updates (${tour}) fetch failed: ${e.message}`);
+    }
+  }
+
+  return null;
+}
+
+async function resolveSportsDataTournamentId(internalTournamentId, supabase) {
+  // 1. Explicit sdio_ prefix
+  const explicit = String(internalTournamentId || "").match(/^sdio_(\d+)$/i);
+  if (explicit) return Number(explicit[1]);
+
+  // 2. Env override
+  if (SPORTS_DATA_TOURNAMENT_MAP_OVERRIDE[internalTournamentId]) {
+    return Number(SPORTS_DATA_TOURNAMENT_MAP_OVERRIDE[internalTournamentId]);
+  }
+
+  // 3. In-memory cache from a previous lookup
+  if (AUTO_SDIO_MAP[internalTournamentId]) return AUTO_SDIO_MAP[internalTournamentId];
+
+  // 4. Look up by tournament name/date against the SportsDataIO schedule
+  if (!supabase || !SPORTS_DATA_KEY) return null;
+
+  const { data: tournament } = await supabase
+    .from("tournaments")
+    .select("name, start_date")
+    .eq("id", internalTournamentId)
+    .single();
+  if (!tournament?.name) return null;
+
+  const year = String(tournament.start_date || "").slice(0, 4) || new Date().getUTCFullYear();
+  const url = `${SPORTS_DATA_BASE}/Tournaments/${year}?key=${SPORTS_DATA_KEY}`;
+  try {
+    const resp = await fetch(url, { timeout: 12000 });
+    if (!resp.ok) return null;
+    const items = await resp.json();
+    if (!Array.isArray(items)) return null;
+
+    const targetName = normalizeName(tournament.name);
+    let best = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    for (const t of items) {
+      const tName = normalizeName(t.Name || t.TournamentName || "");
+      const tStart = (t.StartDate || t.StartDateTime || "").slice(0, 10);
+      const namePenalty = (tName.includes(targetName) || targetName.includes(tName)) ? 0 : 25;
+      const datePenalty = dateDistanceDays(tournament.start_date, tStart);
+      const score = namePenalty + datePenalty;
+      if (score < bestScore) {
+        bestScore = score;
+        best = t;
+      }
+    }
+
+    // Only accept close matches (name match within 10 days, or date match within 3 days)
+    if (!best || bestScore > 10) return null;
+    const resolvedId = Number(best.TournamentID || best.TournamentId || best.ID);
+    if (!Number.isFinite(resolvedId)) return null;
+
+    AUTO_SDIO_MAP[internalTournamentId] = resolvedId;
+    return resolvedId;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchSportsDataScores(internalTournamentId, supabase) {
   if (!SPORTS_DATA_KEY) return null;
 
-  const explicit = String(internalTournamentId || "").match(/^sdio_(\d+)$/i);
-  const externalId = explicit ? Number(explicit[1]) : SPORTS_DATA_TOURNAMENT_MAP[internalTournamentId];
+  const externalId = await resolveSportsDataTournamentId(internalTournamentId, supabase);
   if (!externalId) return null;
 
   const url = `${SPORTS_DATA_BASE}/Leaderboard/${externalId}?key=${SPORTS_DATA_KEY}`;
