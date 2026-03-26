@@ -85,6 +85,36 @@ const SPORTS_DATA_TOURNAMENT_MAP_OVERRIDE = parseMap(process.env.SPORTS_DATA_TOU
  * Main sync function — called by cron every 30s
  */
 async function syncLiveScores(supabase) {
+  // Auto-activate tournaments whose start_date is today or earlier and end_date hasn't passed
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: upcomingReady } = await supabase
+    .from("tournaments")
+    .select("id, name, start_date, end_date")
+    .eq("status", "upcoming")
+    .lte("start_date", today);
+  if (upcomingReady?.length) {
+    for (const t of upcomingReady) {
+      // Only activate if end_date hasn't passed (or no end_date set)
+      if (!t.end_date || t.end_date >= today) {
+        await supabase.from("tournaments").update({ status: "active" }).eq("id", t.id);
+        console.log(`Auto-activated tournament: ${t.name} (${t.id})`);
+      }
+    }
+  }
+
+  // Auto-complete tournaments whose end_date has passed
+  const { data: expiredActive } = await supabase
+    .from("tournaments")
+    .select("id, name, end_date")
+    .eq("status", "active")
+    .lt("end_date", today);
+  if (expiredActive?.length) {
+    for (const t of expiredActive) {
+      await supabase.from("tournaments").update({ status: "complete" }).eq("id", t.id);
+      console.log(`Auto-completed tournament: ${t.name} (${t.id})`);
+    }
+  }
+
   // Find active tournaments
   const { data: activeTournaments } = await supabase
     .from("tournaments")
@@ -534,33 +564,54 @@ function extractDataGolfPlayerArray(json) {
 async function fetchDataGolfLiveScores(internalTournamentId, supabase) {
   if (!DATAGOLF_API_KEY) return null;
 
-  // 1. Try the in-play predictions endpoint (best live data)
-  const inPlayUrl = `${DATAGOLF_BASE_URL}/preds/in-play?file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
-  try {
-    const json = await dgSyncFetchJson(inPlayUrl);
-    if (json) {
+  // Resolve tournament name for matching against DataGolf event names
+  let tournamentName = "";
+  if (supabase) {
+    const { data: tRow } = await supabase
+      .from("tournaments")
+      .select("name")
+      .eq("id", internalTournamentId)
+      .single();
+    tournamentName = normalizeName(tRow?.name || "");
+  }
+
+  // 1. Try the in-play predictions endpoint for each tour
+  const toursToTry = ["pga", "euro", "kft", "opp", "alt"];
+  for (const tour of toursToTry) {
+    const inPlayUrl = `${DATAGOLF_BASE_URL}/preds/in-play?tour=${encodeURIComponent(tour)}&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
+    try {
+      const json = await dgSyncFetchJson(inPlayUrl);
+      if (!json) continue;
+      // Check if this event matches the tournament we're syncing
+      const eventName = normalizeName(json.event_name || json.info?.event_name || "");
+      if (tournamentName && eventName && !eventName.includes(tournamentName) && !tournamentName.includes(eventName)) {
+        continue; // Wrong event for this tournament
+      }
       const players = extractDataGolfPlayerArray(json);
       const rows = players.map(normalizeDataGolfScoreRow).filter(Boolean);
       if (rows.length) {
-        console.log(`DataGolf in-play fallback returned ${rows.length} scores`);
+        console.log(`DataGolf in-play (${tour}) returned ${rows.length} scores for ${tournamentName || internalTournamentId}`);
         return rows;
       }
+    } catch (e) {
+      console.warn(`DataGolf in-play (${tour}) fetch failed: ${e.message}`);
     }
-  } catch (e) {
-    console.warn(`DataGolf in-play fetch failed: ${e.message}`);
   }
 
   // 2. Fallback to field-updates which may include current round scores
-  const toursToTry = ["pga", "euro", "kft", "opp", "alt"];
   for (const tour of toursToTry) {
     const fieldUrl = `${DATAGOLF_BASE_URL}/field-updates?tour=${encodeURIComponent(tour)}&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
     try {
       const json = await dgSyncFetchJson(fieldUrl);
       if (!json) continue;  // rate-limited, skip
+      const eventName = normalizeName(json.event_name || "");
+      if (tournamentName && eventName && !eventName.includes(tournamentName) && !tournamentName.includes(eventName)) {
+        continue; // Wrong event
+      }
       const players = extractDataGolfPlayerArray(json);
       const rows = players.map(normalizeDataGolfScoreRow).filter(Boolean);
       if (rows.length) {
-        console.log(`DataGolf field-updates (${tour}) fallback returned ${rows.length} scores`);
+        console.log(`DataGolf field-updates (${tour}) returned ${rows.length} scores for ${tournamentName || internalTournamentId}`);
         return rows;
       }
     } catch (e) {
