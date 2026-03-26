@@ -161,7 +161,29 @@ async function syncLiveScores(supabase) {
         .upsert(rows, { onConflict: "tournament_id,golfer_id" });
 
       if (error) console.error(`Score upsert error [${tournament.name}]:`, error.message);
-      else console.log(`✅ Synced ${rows.length} scores for ${tournament.name}`);
+      else {
+        console.log(`✅ Synced ${rows.length} scores for ${tournament.name}`);
+        // Clean up any stale golfer rows from previous wrong-tour syncs.
+        // Only keep golfer IDs that are in the current sync batch.
+        const validIds = rows.map(r => r.golfer_id).filter(Number.isFinite);
+        if (validIds.length >= 10) {  // Only clean if we have a substantial field
+          const { data: existing } = await supabase
+            .from("tournament_scores")
+            .select("golfer_id")
+            .eq("tournament_id", tournament.id);
+          const staleIds = (existing || [])
+            .map(e => e.golfer_id)
+            .filter(id => !validIds.includes(id));
+          if (staleIds.length > 0 && staleIds.length < 300) {
+            await supabase
+              .from("tournament_scores")
+              .delete()
+              .eq("tournament_id", tournament.id)
+              .in("golfer_id", staleIds);
+            console.log(`🧹 Cleaned ${staleIds.length} stale scores from ${tournament.name}`);
+          }
+        }
+      }
     } catch (e) {
       console.error(`Score sync failed for tournament ${tournament.id}:`, e.message);
     }
@@ -439,7 +461,7 @@ async function fetchBallDontLieScores(internalTournamentId, supabase) {
 //   2. /field-updates  — field data that includes per-round scores
 // Both are tried; in-play is preferred because it has live position + thru data.
 
-function normalizeDataGolfScoreRow(raw) {
+function normalizeDataGolfScoreRow(raw, coursePar) {
   if (!raw) return null;
 
   // Player identification — DataGolf uses dg_id as primary key
@@ -459,51 +481,66 @@ function normalizeDataGolfScoreRow(raw) {
   const posRaw = raw.current_pos ?? raw.position ?? raw.pos ?? raw.rank ?? raw.fin_text ?? null;
   let position = 999;
   if (posRaw != null) {
-    // DataGolf positions can be strings like "T5", "1", "CUT", "WD"
     const numMatch = String(posRaw).match(/(\d+)/);
     if (numMatch) position = Number(numMatch[1]);
   }
 
-  // Round scores — in-play endpoint nests them differently than field-updates
-  const rounds = raw.rounds ?? raw.round_scores ?? null;
-  let r1 = null, r2 = null, r3 = null, r4 = null;
+  // ─── Score normalization ───────────────────────────────────────
+  // ALL scores are stored as TO-PAR values (negative = under par).
+  // DataGolf in-play returns:
+  //   - R1/R2/R3/R4: raw strokes (66, 71...) when round is complete, null when in-progress
+  //   - current_score: cumulative to-par (-5, +2...)
+  //   - today: today's round to-par
+  //   - round: current round number (1-4)
+  //   - thru: holes completed in current round
+  // We convert raw strokes to to-par using course par (default 72).
 
+  const par = Number(coursePar) || 72;
+  const curRound = Number(raw.current_round ?? raw.round ?? raw.thru_round ?? 0);
+  const currentScore = Number(raw.current_score ?? raw.total_to_par ?? raw.total ?? raw.score ?? NaN);
+  const todayScore = Number(raw.today ?? NaN);
+
+  // Helper: convert raw strokes to to-par, or pass through if already to-par
+  const strokesToPar = (v) => {
+    if (v == null) return null;
+    const n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    // If value looks like raw strokes (typically 55-90 range), convert to to-par
+    if (n > 50) return n - par;
+    // Already to-par (small number like -4, 0, +3)
+    return n;
+  };
+
+  // Extract per-round scores from DataGolf flat fields
+  let r1 = strokesToPar(raw.R1 ?? raw.r1 ?? raw.round1 ?? raw.Round1);
+  let r2 = strokesToPar(raw.R2 ?? raw.r2 ?? raw.round2 ?? raw.Round2);
+  let r3 = strokesToPar(raw.R3 ?? raw.r3 ?? raw.round3 ?? raw.Round3);
+  let r4 = strokesToPar(raw.R4 ?? raw.r4 ?? raw.round4 ?? raw.Round4);
+
+  // Handle rounds as array or object
+  const rounds = raw.rounds ?? raw.round_scores ?? null;
   if (Array.isArray(rounds)) {
-    // Array of round score numbers or objects
-    const rv = (idx) => {
-      const v = rounds[idx];
-      if (v == null) return null;
-      if (typeof v === "number") return v;
-      const n = Number(v.score ?? v.strokes ?? v.total ?? v);
-      return Number.isFinite(n) ? n : null;
-    };
-    r1 = rv(0); r2 = rv(1); r3 = rv(2); r4 = rv(3);
+    const rv = (idx) => strokesToPar(typeof rounds[idx] === "object" ? (rounds[idx]?.score ?? rounds[idx]?.strokes ?? rounds[idx]?.total) : rounds[idx]);
+    if (r1 == null) r1 = rv(0);
+    if (r2 == null) r2 = rv(1);
+    if (r3 == null) r3 = rv(2);
+    if (r4 == null) r4 = rv(3);
   } else if (rounds && typeof rounds === "object") {
-    // Object keyed by round number: { "1": 68, "2": 71, ... }
-    const rv = (k) => { const n = Number(rounds[k]); return Number.isFinite(n) ? n : null; };
-    r1 = rv("1") ?? rv(1); r2 = rv("2") ?? rv(2);
-    r3 = rv("3") ?? rv(3); r4 = rv("4") ?? rv(4);
-  } else {
-    // Flat fields: r1/r2/r3/r4 or round1/round2/round3/round4
-    const rv = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
-    r1 = rv(raw.r1 ?? raw.round1 ?? raw.R1 ?? raw.Round1);
-    r2 = rv(raw.r2 ?? raw.round2 ?? raw.R2 ?? raw.Round2);
-    r3 = rv(raw.r3 ?? raw.round3 ?? raw.R3 ?? raw.Round3);
-    r4 = rv(raw.r4 ?? raw.round4 ?? raw.R4 ?? raw.Round4);
+    const rv = (k) => strokesToPar(rounds[k]);
+    if (r1 == null) r1 = rv("1") ?? rv(1);
+    if (r2 == null) r2 = rv("2") ?? rv(2);
+    if (r3 == null) r3 = rv("3") ?? rv(3);
+    if (r4 == null) r4 = rv("4") ?? rv(4);
   }
 
-  // Total score to par — useful when individual round scores aren't available
-  const totalToPar = Number(
-    raw.total ?? raw.total_to_par ?? raw.score ?? raw.total_score ?? raw.current_score ?? NaN
-  );
-  // If we have no round scores at all but have a total, put it in the latest round slot
-  // so the standings can still reflect live movement.
-  if (r1 == null && r2 == null && r3 == null && r4 == null && Number.isFinite(totalToPar)) {
-    const curRound = Number(raw.current_round ?? raw.round ?? raw.thru_round ?? 0);
-    if (curRound === 1) r1 = totalToPar;
-    else if (curRound === 2) r2 = totalToPar;
-    else if (curRound === 3) r3 = totalToPar;
-    else r4 = totalToPar;
+  // If we still have no round scores, use current_score/today as the live score
+  // for the current round. This handles mid-round scoring.
+  if (r1 == null && r2 == null && r3 == null && r4 == null && Number.isFinite(currentScore)) {
+    // Place the cumulative to-par score in the current round slot
+    if (curRound === 1) r1 = currentScore;
+    else if (curRound === 2) r2 = currentScore;
+    else if (curRound === 3) r3 = currentScore;
+    else r4 = currentScore;
   }
 
   // Status mapping: active / cut / wd
@@ -561,6 +598,10 @@ function extractDataGolfPlayerArray(json) {
   return [];
 }
 
+// Cache which tour each tournament maps to, so we don't re-scan all tours every 30s
+const TOURNAMENT_TOUR_CACHE = new Map(); // tournamentId -> { tour, eventName, ts }
+const TOUR_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
 async function fetchDataGolfLiveScores(internalTournamentId, supabase) {
   if (!DATAGOLF_API_KEY) return null;
 
@@ -575,22 +616,38 @@ async function fetchDataGolfLiveScores(internalTournamentId, supabase) {
     tournamentName = normalizeName(tRow?.name || "");
   }
 
-  // 1. Try the in-play predictions endpoint for each tour
-  const toursToTry = ["pga", "euro", "kft", "opp", "alt"];
+  // FAIL-SAFE: if we can't resolve the tournament name, skip entirely
+  // to avoid pulling wrong tournament's data
+  if (!tournamentName) {
+    console.warn(`DataGolf: cannot resolve name for ${internalTournamentId}, skipping`);
+    return null;
+  }
+
+  // Check cache for which tour this tournament belongs to
+  const cached = TOURNAMENT_TOUR_CACHE.get(internalTournamentId);
+  const toursToTry = (cached && Date.now() - cached.ts < TOUR_CACHE_TTL_MS)
+    ? [cached.tour]  // Use cached tour first
+    : ["pga", "euro", "kft", "opp", "alt"];
+
+  // 1. Try the in-play predictions endpoint
   for (const tour of toursToTry) {
     const inPlayUrl = `${DATAGOLF_BASE_URL}/preds/in-play?tour=${encodeURIComponent(tour)}&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
     try {
       const json = await dgSyncFetchJson(inPlayUrl);
       if (!json) continue;
-      // Check if this event matches the tournament we're syncing
       const eventName = normalizeName(json.event_name || json.info?.event_name || "");
-      if (tournamentName && eventName && !eventName.includes(tournamentName) && !tournamentName.includes(eventName)) {
-        continue; // Wrong event for this tournament
+      // STRICT name matching — both must exist and match
+      if (!eventName || (!eventName.includes(tournamentName) && !tournamentName.includes(eventName))) {
+        continue;
       }
+      // Extract course par from the API response
+      const coursePar = Number(json.course_par ?? json.info?.course_par ?? json.par ?? 72) || 72;
       const players = extractDataGolfPlayerArray(json);
-      const rows = players.map(normalizeDataGolfScoreRow).filter(Boolean);
+      const rows = players.map(p => normalizeDataGolfScoreRow(p, coursePar)).filter(Boolean);
       if (rows.length) {
-        console.log(`DataGolf in-play (${tour}) returned ${rows.length} scores for ${tournamentName || internalTournamentId}`);
+        // Cache this tour mapping
+        TOURNAMENT_TOUR_CACHE.set(internalTournamentId, { tour, eventName, ts: Date.now() });
+        console.log(`DataGolf in-play (${tour}) returned ${rows.length} scores for "${tournamentName}" [par ${coursePar}]`);
         return rows;
       }
     } catch (e) {
@@ -598,20 +655,22 @@ async function fetchDataGolfLiveScores(internalTournamentId, supabase) {
     }
   }
 
-  // 2. Fallback to field-updates which may include current round scores
+  // 2. Fallback to field-updates
   for (const tour of toursToTry) {
     const fieldUrl = `${DATAGOLF_BASE_URL}/field-updates?tour=${encodeURIComponent(tour)}&file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
     try {
       const json = await dgSyncFetchJson(fieldUrl);
-      if (!json) continue;  // rate-limited, skip
+      if (!json) continue;
       const eventName = normalizeName(json.event_name || "");
-      if (tournamentName && eventName && !eventName.includes(tournamentName) && !tournamentName.includes(eventName)) {
-        continue; // Wrong event
+      if (!eventName || (!eventName.includes(tournamentName) && !tournamentName.includes(eventName))) {
+        continue;
       }
+      const coursePar = Number(json.course_par ?? json.par ?? 72) || 72;
       const players = extractDataGolfPlayerArray(json);
-      const rows = players.map(normalizeDataGolfScoreRow).filter(Boolean);
+      const rows = players.map(p => normalizeDataGolfScoreRow(p, coursePar)).filter(Boolean);
       if (rows.length) {
-        console.log(`DataGolf field-updates (${tour}) returned ${rows.length} scores for ${tournamentName || internalTournamentId}`);
+        TOURNAMENT_TOUR_CACHE.set(internalTournamentId, { tour, eventName, ts: Date.now() });
+        console.log(`DataGolf field-updates (${tour}) returned ${rows.length} scores for "${tournamentName}"`);
         return rows;
       }
     } catch (e) {
