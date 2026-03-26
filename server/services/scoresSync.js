@@ -787,6 +787,7 @@ async function seedGolfers(supabase) {
     if (!DATAGOLF_API_KEY) return null;
     const plUrl = `${DATAGOLF_BASE_URL}/get-player-list?file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
     const rkUrl = `${DATAGOLF_BASE_URL}/preds/get-dg-rankings?file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
+    const sdUrl = `${DATAGOLF_BASE_URL}/preds/skill-decompositions?file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
 
     const [plResp, rkResp] = await Promise.all([
       fetch(plUrl, { timeout: 12000 }),
@@ -795,26 +796,44 @@ async function seedGolfers(supabase) {
     if (!plResp.ok) throw new Error(`DataGolf player list returned ${plResp.status}`);
     if (!rkResp.ok) throw new Error(`DataGolf rankings returned ${rkResp.status}`);
 
+    // Skill decompositions is optional (may not be in all API tiers).
+    let sdJson = null;
+    try {
+      const sdResp = await fetch(sdUrl, { timeout: 12000 });
+      if (sdResp.ok) sdJson = await sdResp.json();
+    } catch { /* ignore */ }
+
     const [plJson, rkJson] = await Promise.all([plResp.json(), rkResp.json()]);
     const players = pickFirstArray(plJson, ["players", "data", "player_list", "list"]);
     const ranks = pickFirstArray(rkJson, ["rankings", "data", "players", "results"]);
+    const skills = sdJson ? pickFirstArray(sdJson, ["players", "data", "rankings", "results", "decompositions"]) : [];
+
+    // Build skill-decompositions map (has sg_putt, sg_arg, sg_app, sg_ott, sg_total, driving_dist, driving_acc).
+    const skillMap = new Map();
+    for (const s of skills) {
+      const id = Number(s?.dg_id ?? s?.dgid ?? s?.datagolf_id ?? s?.player_id ?? s?.id);
+      if (!Number.isFinite(id) || id <= 0) continue;
+      skillMap.set(id, s);
+    }
+
+    const toNum = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
 
     const rankMap = new Map();
     for (const r of ranks) {
       const id = Number(r?.dg_id ?? r?.dgid ?? r?.datagolf_id ?? r?.player_id ?? r?.id);
       if (!Number.isFinite(id) || id <= 0) continue;
       const owgr = Number(r?.owgr_rank ?? r?.owgr ?? r?.world_rank ?? r?.rank ?? r?.owgrRank);
-
-      const toNum = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+      const sk = skillMap.get(id) || {};
 
       rankMap.set(id, {
         world_rank: (Number.isFinite(owgr) && owgr > 0) ? owgr : null,
-        sg_total:    toNum(r?.sg_total ?? r?.sg_t ?? r?.strokes_gained_total),
-        driv_dist:   toNum(r?.driving_dist ?? r?.driv_dist ?? r?.distance ?? r?.driving_distance),
-        driv_acc:    toNum(r?.driving_acc ?? r?.driv_acc ?? r?.accuracy ?? r?.driving_accuracy),
-        gir:         toNum(r?.gir ?? r?.gir_pct ?? r?.greens_in_regulation),
-        putts:       toNum(r?.putting_avg ?? r?.putts_per_round ?? r?.putt_avg ?? r?.sg_putt ?? r?.sg_putting),
-        scoring_avg: toNum(r?.scoring_avg ?? r?.scoring_average ?? r?.score_avg),
+        // sg_total: prefer skill-decompositions, fall back to rankings dg_skill_estimate
+        sg_total:    toNum(sk?.sg_total ?? r?.sg_total ?? r?.dg_skill_estimate ?? r?.sg_t ?? r?.strokes_gained_total),
+        driv_dist:   toNum(sk?.driving_dist ?? sk?.driving_distance ?? r?.driving_dist ?? r?.driving_distance),
+        driv_acc:    toNum(sk?.driving_acc ?? sk?.driving_accuracy ?? r?.driving_acc ?? r?.driving_accuracy),
+        gir:         toNum(sk?.gir ?? sk?.gir_pct ?? sk?.greens_in_regulation ?? r?.gir ?? r?.gir_pct),
+        putts:       toNum(sk?.sg_putt ?? sk?.sg_putting ?? sk?.putting_avg ?? r?.sg_putt ?? r?.sg_putting ?? r?.putting_avg),
+        scoring_avg: toNum(sk?.scoring_avg ?? sk?.scoring_average ?? r?.scoring_avg ?? r?.scoring_average),
       });
     }
 

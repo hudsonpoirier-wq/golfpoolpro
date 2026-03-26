@@ -2266,6 +2266,29 @@ app.get("/api/admin/datagolf/rankings-debug", requireAdmin, async (req, res) => 
   }
 });
 
+app.get("/api/admin/datagolf/skill-decompositions-debug", requireAdmin, async (req, res) => {
+  if (!DATAGOLF_API_KEY) return res.status(400).json({ error: "DATAGOLF_API_KEY not set." });
+  const url = `${DATAGOLF_BASE_URL}/preds/skill-decompositions?file_format=json&key=${encodeURIComponent(DATAGOLF_API_KEY)}`;
+  try {
+    const json = await datagolfFetchJson(url);
+    const topLevelKeys = json && typeof json === "object" && !Array.isArray(json) ? Object.keys(json) : null;
+    const items = pickFirstArray(json, ["players", "data", "rankings", "results", "decompositions"]);
+    const sample = items.slice(0, 3);
+    const sampleKeys = sample.length ? Object.keys(sample[0]) : [];
+    return res.json({
+      provider: "DataGolf",
+      url: redactUrlSecrets(url),
+      topLevelType: Array.isArray(json) ? "array" : typeof json,
+      topLevelKeys,
+      totalItems: items.length,
+      sampleKeys,
+      sample,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e?.message || String(e), url: redactUrlSecrets(url) });
+  }
+});
+
 app.get("/api/admin/datagolf/major-fields-debug", requireAdmin, async (req, res) => {
   const major = String(req.query.major || "masters").toLowerCase();
   const bust = String(req.query.bust || "").toLowerCase() === "1";
