@@ -1,6 +1,7 @@
 // server/routes/invites.js
 // Handles invite link resolution and joining pools via token
 
+const crypto = require("crypto");
 const router = require("express").Router();
 const { requireAuth, optionalAuth } = require("../middleware/auth");
 
@@ -114,7 +115,7 @@ router.post("/pools/:id/regenerate", requireAuth, async (req, res, next) => {
     const { data, error } = await sb.rpc("regenerate_invite_token", { pool_id: id });
     if (error) {
       // Fallback: update manually
-      const newToken = Math.random().toString(36).slice(2, 10);
+      const newToken = crypto.randomBytes(6).toString("hex");
       const { data: updated } = await sb.from("pools").update({ invite_token: newToken }).eq("id", id).select("invite_token").single();
       return res.json({ invite_token: updated.invite_token });
     }

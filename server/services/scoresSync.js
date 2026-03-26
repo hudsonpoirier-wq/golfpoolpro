@@ -694,7 +694,18 @@ async function seedGolfers(supabase) {
       const id = Number(r?.dg_id ?? r?.dgid ?? r?.datagolf_id ?? r?.player_id ?? r?.id);
       if (!Number.isFinite(id) || id <= 0) continue;
       const owgr = Number(r?.owgr_rank ?? r?.owgr ?? r?.world_rank ?? r?.rank ?? r?.owgrRank);
-      if (Number.isFinite(owgr) && owgr > 0) rankMap.set(id, owgr);
+
+      const toNum = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+
+      rankMap.set(id, {
+        world_rank: (Number.isFinite(owgr) && owgr > 0) ? owgr : null,
+        sg_total:    toNum(r?.sg_total ?? r?.sg_t ?? r?.strokes_gained_total),
+        driv_dist:   toNum(r?.driving_dist ?? r?.driv_dist ?? r?.distance ?? r?.driving_distance),
+        driv_acc:    toNum(r?.driving_acc ?? r?.driv_acc ?? r?.accuracy ?? r?.driving_accuracy),
+        gir:         toNum(r?.gir ?? r?.gir_pct ?? r?.greens_in_regulation),
+        putts:       toNum(r?.putting_avg ?? r?.putts_per_round ?? r?.putt_avg ?? r?.sg_putt ?? r?.sg_putting),
+        scoring_avg: toNum(r?.scoring_avg ?? r?.scoring_average ?? r?.score_avg),
+      });
     }
 
     const nowIso = new Date().toISOString();
@@ -705,13 +716,19 @@ async function seedGolfers(supabase) {
       const name = String(p?.player_name ?? p?.full_name ?? p?.name ?? p?.player ?? "").trim();
       if (!name) continue;
       const country = p?.country || p?.nationality || p?.country_code || p?.country_name || null;
-      const world_rank = rankMap.get(id) || null;
+      const stats = rankMap.get(id) || {};
       rows.push({
         id,
         name,
         country,
-        world_rank,
-        updated_at: nowIso,
+        world_rank:  stats.world_rank ?? null,
+        sg_total:    stats.sg_total ?? null,
+        driv_dist:   stats.driv_dist != null ? Math.round(stats.driv_dist) : null,
+        driv_acc:    stats.driv_acc ?? null,
+        gir:         stats.gir ?? null,
+        putts:       stats.putts ?? null,
+        scoring_avg: stats.scoring_avg ?? null,
+        updated_at:  nowIso,
       });
     }
     return rows.length ? rows : null;

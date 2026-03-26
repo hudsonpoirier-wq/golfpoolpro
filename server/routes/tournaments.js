@@ -1,6 +1,10 @@
 const router = require("express").Router();
 const { seedUpcomingTournaments } = require("../services/tournamentSync");
 
+// Cooldown to prevent re-seeding on every request when row count stays below threshold
+const SEED_COOLDOWN_MS = Number(process.env.SEED_COOLDOWN_MS || 10 * 60 * 1000); // 10 min
+let lastSeedAttemptMs = 0;
+
 // GET /api/tournaments/future
 router.get("/future", async (_req, res, next) => {
   try {
@@ -16,7 +20,9 @@ router.get("/future", async (_req, res, next) => {
     let { data, error } = await query();
     if (error) return res.status(500).json({ error: error.message });
 
-    if ((data || []).length < minRows) {
+    const now = Date.now();
+    if ((data || []).length < minRows && now - lastSeedAttemptMs >= SEED_COOLDOWN_MS) {
+      lastSeedAttemptMs = now;
       await seedUpcomingTournaments(sb, new Date().getUTCFullYear());
       const rerun = await query();
       if (!rerun.error) data = rerun.data || data;

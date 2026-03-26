@@ -70,7 +70,7 @@ scoresRouter.get("/:tournamentId", optionalAuth, async (req, res, next) => {
     const sb = req.app.locals.supabase;
     const { data, error } = await sb
       .from("tournament_scores")
-      .select("*, golfer:golfers(id, name, country, world_rank, driv_dist, gir, scoring_avg, sg_total)")
+      .select("*, golfer:golfers(id, name, country, world_rank, driv_dist, driv_acc, gir, putts, scoring_avg, sg_total)")
       .eq("tournament_id", req.params.tournamentId)
       .order("position");
     if (error) return res.status(500).json({ error: error.message });

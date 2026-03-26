@@ -45,26 +45,27 @@ router.get("/pools/:token/leaderboard", async (req, res, next) => {
       };
     }).sort((a, b) => (a.score ?? 999999999) - (b.score ?? 999999999));
 
+    // Strip host.id to avoid leaking internal user IDs publicly
+    const safeHost = pool.host ? { name: pool.host.name, avatar: pool.host.avatar } : null;
+
     res.json({
       pool: {
         id: pool.id,
         name: pool.name,
         status: pool.status,
-        invite_token: pool.invite_token,
         max_participants: pool.max_participants,
         team_size: pool.team_size,
         scoring_golfers: pool.scoring_golfers,
         cut_line: pool.cut_line,
         shot_clock: pool.shot_clock,
         tournament: pool.tournament || null,
-        host: pool.host || null,
+        host: safeHost,
       },
       members: (members || []).map((m) => ({
-        user_id: m.user_id,
         name: m.profile?.name || "Player",
         avatar: m.profile?.avatar || null,
       })),
-      standings,
+      standings: standings.map(({ user_id, ...rest }) => rest),
     });
   } catch (e) { next(e); }
 });

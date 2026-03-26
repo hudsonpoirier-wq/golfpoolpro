@@ -101,8 +101,8 @@ router.get("/:poolId", requireAuth, async (req, res, next) => {
       timeRemaining = computeTimeRemaining(clock, pool.shot_clock);
     }
 
-    // Auto-skip if clock has expired
-    if (!paused && !isDone && timeRemaining <= 0 && currentPickOwner) {
+    // Auto-skip if clock has expired (only for active drafts)
+    if (!paused && !isDone && pool.status === "draft" && timeRemaining <= 0 && currentPickOwner) {
       const didSkip = await autoSkip(sb, poolId, currentPickOwner, pool, picks, draftOrder);
       if (didSkip) return res.redirect(307, `/api/draft/${poolId}`);
     }
@@ -129,9 +129,10 @@ router.post("/:poolId/pause", requireAuth, async (req, res, next) => {
   try {
     const sb = req.app.locals.supabase;
     const { poolId } = req.params;
-    const { data: pool } = await sb.from("pools").select("host_id, shot_clock, team_size").eq("id", poolId).single();
+    const { data: pool } = await sb.from("pools").select("host_id, status, shot_clock, team_size").eq("id", poolId).single();
     if (!pool) return res.status(404).json({ error: "Pool not found." });
     if (String(pool.host_id) !== String(req.user.id)) return res.status(403).json({ error: "Only the host can pause the draft." });
+    if (pool.status !== "draft") return res.status(400).json({ error: "Draft is not active." });
     // Freeze the current pick time remaining.
     try {
       const { data: members } = await sb
@@ -160,9 +161,10 @@ router.post("/:poolId/resume", requireAuth, async (req, res, next) => {
   try {
     const sb = req.app.locals.supabase;
     const { poolId } = req.params;
-    const { data: pool } = await sb.from("pools").select("host_id, shot_clock").eq("id", poolId).single();
+    const { data: pool } = await sb.from("pools").select("host_id, status, shot_clock").eq("id", poolId).single();
     if (!pool) return res.status(404).json({ error: "Pool not found." });
     if (String(pool.host_id) !== String(req.user.id)) return res.status(403).json({ error: "Only the host can resume the draft." });
+    if (pool.status !== "draft") return res.status(400).json({ error: "Draft is not active." });
     pausedDraftPools.delete(poolId);
     // Continue clock from the frozen remaining time.
     try {
@@ -190,9 +192,12 @@ router.post("/:poolId/pick", requireAuth, async (req, res, next) => {
   try {
     const sb = req.app.locals.supabase;
     const { poolId } = req.params;
-    const { golferId } = req.body;
+    const rawGolferId = req.body.golferId;
+    const golferId = Number(rawGolferId);
 
-    if (!golferId) return res.status(400).json({ error: "golferId is required." });
+    if (!rawGolferId || !Number.isFinite(golferId) || golferId <= 0) {
+      return res.status(400).json({ error: "golferId must be a positive integer." });
+    }
     if (pausedDraftPools.has(poolId)) return res.status(409).json({ error: "Draft is paused." });
 
     const { data: pool } = await sb
@@ -225,8 +230,8 @@ router.post("/:poolId/pick", requireAuth, async (req, res, next) => {
       return res.status(403).json({ error: "It is not your turn to pick." });
     }
 
-    // Check golfer not already taken
-    if (picks.find(p => p.golfer_id === golferId)) {
+    // Check golfer not already taken (numeric comparison to avoid type mismatch)
+    if (picks.find(p => Number(p.golfer_id) === golferId)) {
       return res.status(409).json({ error: "This golfer has already been drafted." });
     }
 
@@ -235,7 +240,13 @@ router.post("/:poolId/pick", requireAuth, async (req, res, next) => {
       .insert({ pool_id: poolId, user_id: req.user.id, golfer_id: golferId, pick_number: picks.length })
       .select()
       .single();
-    if (error) return res.status(400).json({ error: error.message });
+    if (error) {
+      // Handle race condition: unique constraint on (pool_id, pick_number) or (pool_id, golfer_id)
+      if (error.code === "23505") {
+        return res.status(409).json({ error: "Pick conflict — another pick was made simultaneously. Please retry." });
+      }
+      return res.status(400).json({ error: error.message });
+    }
 
     // Start the next pick timer now.
     try {
@@ -260,8 +271,11 @@ router.post("/:poolId/force-pick", requireAuth, async (req, res, next) => {
   try {
     const sb = req.app.locals.supabase;
     const { poolId } = req.params;
-    const { golferId } = req.body;
-    if (!golferId) return res.status(400).json({ error: "golferId is required." });
+    const rawGolferId = req.body.golferId;
+    const golferId = Number(rawGolferId);
+    if (!rawGolferId || !Number.isFinite(golferId) || golferId <= 0) {
+      return res.status(400).json({ error: "golferId must be a positive integer." });
+    }
 
     const { data: pool } = await sb
       .from("pools")
@@ -291,7 +305,7 @@ router.post("/:poolId/force-pick", requireAuth, async (req, res, next) => {
     const draftOrder = buildSnakeOrder(members.map(m => m.user_id), pool.team_size);
     const currentOwner = draftOrder[picks.length];
 
-    if (picks.find(p => p.golfer_id === golferId)) {
+    if (picks.find(p => Number(p.golfer_id) === golferId)) {
       return res.status(409).json({ error: "This golfer has already been drafted." });
     }
 
@@ -300,7 +314,12 @@ router.post("/:poolId/force-pick", requireAuth, async (req, res, next) => {
       .insert({ pool_id: poolId, user_id: currentOwner, golfer_id: golferId, pick_number: picks.length })
       .select()
       .single();
-    if (error) return res.status(400).json({ error: error.message });
+    if (error) {
+      if (error.code === "23505") {
+        return res.status(409).json({ error: "Pick conflict — another pick was made simultaneously. Please retry." });
+      }
+      return res.status(400).json({ error: error.message });
+    }
 
     // Start the next pick timer now.
     try {
@@ -348,12 +367,14 @@ async function autoSkip(sb, poolId, userId, pool, picks, draftOrder) {
   const nextGolfer = field.find((g) => !takenIds.has(g.id));
   if (!nextGolfer) return false;
 
-  await sb.from("draft_picks").insert({
+  const { error: insertErr } = await sb.from("draft_picks").insert({
     pool_id: poolId,
     user_id: userId,
     golfer_id: nextGolfer.id,
     pick_number: picks.length,
   });
+  // If a concurrent request already filled this pick slot, bail gracefully.
+  if (insertErr) return false;
 
   // Start the next pick timer now.
   try {

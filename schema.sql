@@ -115,7 +115,8 @@ create table public.draft_picks (
   golfer_id     int references public.golfers(id) on delete cascade,
   pick_number   int not null,
   picked_at     timestamptz default now(),
-  unique (pool_id, golfer_id)           -- each golfer can only be drafted once per pool
+  unique (pool_id, golfer_id),          -- each golfer can only be drafted once per pool
+  unique (pool_id, pick_number)         -- each pick slot can only be filled once (prevents race conditions)
 );
 
 -- ─── ROW LEVEL SECURITY ──────────────────────────────────────
@@ -179,14 +180,14 @@ select
   (
     select coalesce(sum(total), 0)
     from (
-      select ts.r1 + ts.r2 + ts.r3 + ts.r4 as total
+      select COALESCE(ts.r1, 0) + COALESCE(ts.r2, 0) + COALESCE(ts.r3, 0) + COALESCE(ts.r4, 0) as total
       from public.draft_picks dp2
       join public.tournament_scores ts
         on ts.golfer_id = dp2.golfer_id
        and ts.tournament_id = po.tournament_id
       where dp2.pool_id = dp.pool_id
         and dp2.user_id = dp.user_id
-      order by (ts.r1 + ts.r2 + ts.r3 + ts.r4) asc
+      order by (COALESCE(ts.r1, 0) + COALESCE(ts.r2, 0) + COALESCE(ts.r3, 0) + COALESCE(ts.r4, 0)) asc
       limit po.scoring_golfers
     ) best
   ) as score

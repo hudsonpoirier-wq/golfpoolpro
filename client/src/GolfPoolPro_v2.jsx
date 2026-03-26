@@ -454,6 +454,7 @@ const POOL_DRAFT_PICKS = {
   ],
 };
 
+// Legacy demo SG_DATA – kept as fallback for seed/demo golfer IDs 1-12
 const SG_DATA = {
   1:{ott:1.4,app:1.2,arg:0.8,putt:0.8},2:{ott:1.6,app:0.9,arg:0.5,putt:0.8},
   3:{ott:0.9,app:1.1,arg:0.7,putt:0.7},4:{ott:0.6,app:1.3,arg:0.6,putt:0.6},
@@ -703,6 +704,7 @@ export default function GolfPoolPro() {
   const [authBusy,setAuthBusy] = useState(false);
   const [readyBusyMap,setReadyBusyMap] = useState({});
   const [deleteBusy,setDeleteBusy] = useState(false);
+  const [createBusy,setCreateBusy] = useState(false);
   const [activeLobbyUserIds,setActiveLobbyUserIds] = useState([]);
   const [chatMessages,setChatMessages] = useState([]);
   const [chatText,setChatText] = useState("");
@@ -1602,7 +1604,7 @@ export default function GolfPoolPro() {
     score:getTeamScore(p.id),
     team:getTeam(p.id),
     cutMade:getTeam(p.id).filter(g=>liveScores.find(l=>l.gId===g.id)).length
-  })).sort((a,b)=>a.score-b.score);
+  })).sort((a,b)=>(a.score ?? 9999)-(b.score ?? 9999));
 
   const notify = (msg,type="success") => {
     setNotification({msg,type});
@@ -2080,17 +2082,43 @@ export default function GolfPoolPro() {
   const getPlayerRounds = (gId) => {
     const ls = liveScores.find(l=>l.gId===gId);
     if(!ls) return [];
-    return [1,2,3,4].map(r=>({
-      round:`R${r}`,
-      score:ls[`R${r}`],
-      birdies:ls.birdies[r-1]||0,
-      eagles:ls.eagles[r-1]||0,
-      bogeys:ls.bogeys[r-1]||0,
-      pars:18-(ls.birdies[r-1]||0)-(ls.eagles[r-1]||0)-(ls.bogeys[r-1]||0),
-    }));
+    return [1,2,3,4].map(r=>{
+      const birdies=ls.birdies[r-1]||0;
+      const eagles=ls.eagles[r-1]||0;
+      const bogeys=ls.bogeys[r-1]||0;
+      const played=birdies+eagles+bogeys>0;
+      return {
+        round:`R${r}`,
+        score:ls[`R${r}`],
+        birdies,
+        eagles,
+        bogeys,
+        pars:played?18-birdies-eagles-bogeys:0,
+      };
+    }).filter(r=>r.score!==null&&r.score!==undefined);
   };
 
   const getSGData = (gId) => {
+    // Try to derive radar data from real API golfer stats
+    const golfer = apiGolfers.find(g => g.id === gId);
+    if (golfer && (golfer.drivDist || golfer.drivAcc || golfer.gir || golfer.putts || golfer.sg)) {
+      const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+      const drivDistVal = golfer.drivDist ? clamp((golfer.drivDist - 270) / 20, -0.5, 2) : 0;
+      const drivAccVal  = golfer.drivAcc  ? clamp((golfer.drivAcc - 55) / 15, -0.5, 2)  : 0;
+      const girVal      = golfer.gir      ? clamp((golfer.gir - 60) / 15, -0.5, 2)      : 0;
+      const puttsVal    = golfer.putts     ? clamp((30 - golfer.putts) / 2, -0.5, 2)     : 0;
+      const sgVal       = golfer.sg != null ? golfer.sg : 0;
+      const data = [
+        { stat: "Drive Dist", value: drivDistVal, fullMark: 2.0 },
+        { stat: "Drive Acc",  value: drivAccVal,  fullMark: 2.0 },
+        { stat: "GIR",        value: girVal,       fullMark: 2.0 },
+        { stat: "Putting",    value: puttsVal,     fullMark: 2.0 },
+        { stat: "SG Total",   value: sgVal,        fullMark: 2.0 },
+      ];
+      // Only return if at least one value is non-zero
+      if (data.some(d => d.value !== 0)) return data;
+    }
+    // Fallback to legacy demo SG_DATA for seed golfer IDs
     const sg = SG_DATA[gId];
     if(!sg) return [];
     return [
@@ -2212,13 +2240,18 @@ export default function GolfPoolPro() {
                       style={{fontSize:13,padding:"9px 12px"}}/>
                     {passwordMsg&&<p style={{fontSize:12,color:passwordMsg.includes("✓")?"var(--green)":"var(--red)",fontWeight:600}}>{passwordMsg}</p>}
                     <button className="btn btn-prim" style={{width:"100%",justifyContent:"center",fontSize:13,padding:"9px"}}
-                      onClick={()=>{
+                      onClick={async()=>{
                         if(!newPassword) return setPasswordMsg("Please enter a new password.");
                         if(newPassword.length<6) return setPasswordMsg("Password must be at least 6 characters.");
                         if(newPassword!==confirmPassword) return setPasswordMsg("Passwords don't match.");
-                        setPasswordMsg("✓ Password updated successfully!");
-                        setNewPassword(""); setConfirmPassword("");
-                        setTimeout(()=>setPasswordMsg(""),3000);
+                        try{
+                          await Auth.updatePassword(newPassword);
+                          setPasswordMsg("✓ Password updated successfully!");
+                          setNewPassword(""); setConfirmPassword("");
+                          setTimeout(()=>setPasswordMsg(""),3000);
+                        }catch(err){
+                          setPasswordMsg(err?.message||"Failed to update password. Please try again.");
+                        }
                       }}>
                       Update Password
                     </button>
@@ -3008,8 +3041,8 @@ export default function GolfPoolPro() {
                 const teamRows = (p.team || []).map((g) => {
                   const ls = liveScores.find((l) => l.gId === g.id);
                   const rounds = ls ? [ls.R1, ls.R2, ls.R3, ls.R4] : [null, null, null, null];
-                  const playedRounds = rounds.filter((v) => v !== null && v !== undefined && v !== 0).length;
-                  const playedSum = rounds.filter((v) => v !== null && v !== undefined && v !== 0).reduce((a, b) => a + b, 0);
+                  const playedRounds = rounds.filter((v) => v !== null && v !== undefined).length;
+                  const playedSum = rounds.filter((v) => v !== null && v !== undefined).reduce((a, b) => a + b, 0);
                   const tot = ls ? (ls.R1 + ls.R2 + ls.R3 + ls.R4) : null;
                   const birdies = ls?.birdies ? ls.birdies.reduce((a, b) => a + b, 0) : 0;
                   const eagles = ls?.eagles ? ls.eagles.reduce((a, b) => a + b, 0) : 0;
@@ -3194,7 +3227,7 @@ export default function GolfPoolPro() {
                             [p.name.split(" ")[0]]:p.team.map(g=>{
                               const ls=liveScores.find(l=>l.gId===g.id);
                               if(!ls) return 0;
-                              return [ls.R1,ls.R2,ls.R3,ls.R4].slice(0,ri+1).reduce((a,b)=>a+b,0);
+                              return [ls.R1,ls.R2,ls.R3,ls.R4].slice(0,ri+1).filter(v=>typeof v==='number').reduce((a,b)=>a+b,0);
                             }).sort((a,b)=>a-b).slice(0,sc).reduce((a,b)=>a+b,0)
                           })).reduce((a,b)=>({...a,...b}),{})
                         }))}>
@@ -3264,7 +3297,7 @@ export default function GolfPoolPro() {
                           const myBogeys = myTeam.reduce((t,g)=>{const ls=liveScores.find(l=>l.gId===g.id);return t+(ls?ls.bogeys.reduce((a,b)=>a+b,0):0);},0);
                           const bestGolferScore = myTeamScores.length?Math.min(...myTeamScores):null;
 	                          const bestGolfer = myTeam.find(g=>{const ls=liveScores.find(l=>l.gId===g.id);return sumRounds(ls)===bestGolferScore;});
-                          const allRounds = myTeam.flatMap(g=>{const ls=liveScores.find(l=>l.gId===g.id);return ls?[ls.R1,ls.R2,ls.R3,ls.R4]:[];});
+                          const allRounds = myTeam.flatMap(g=>{const ls=liveScores.find(l=>l.gId===g.id);return ls?[ls.R1,ls.R2,ls.R3,ls.R4].filter(v=>typeof v==='number'):[];});
                           const bestRound = allRounds.length?Math.min(...allRounds):null;
                           const sortedTeamScores = [...myTeamScores].sort((a,b)=>a-b);
 	                          const countingScore = sortedTeamScores.length ? sortedTeamScores.slice(0,sc).reduce((a,b)=>a+b,0) : null;
@@ -3620,8 +3653,8 @@ export default function GolfPoolPro() {
                         {compareA && compareB ? (()=>{
                           const lsA=liveScores.find(l=>l.gId===compareA.id);
                           const lsB=liveScores.find(l=>l.gId===compareB.id);
-                          const totA=lsA?lsA.R1+lsA.R2+lsA.R3+lsA.R4:null;
-                          const totB=lsB?lsB.R1+lsB.R2+lsB.R3+lsB.R4:null;
+                          const totA=lsA?[lsA.R1,lsA.R2,lsA.R3,lsA.R4].filter(v=>typeof v==='number').reduce((a,b)=>a+b,0):null;
+                          const totB=lsB?[lsB.R1,lsB.R2,lsB.R3,lsB.R4].filter(v=>typeof v==='number').reduce((a,b)=>a+b,0):null;
                           const rounds=["R1","R2","R3","R4"].map((r,ri)=>({
                             round:r,
                             [compareA.name.split(" ").pop()]:lsA?lsA[r]:0,
@@ -3801,7 +3834,8 @@ export default function GolfPoolPro() {
                       </div>
                     ))}
                   </div>
-                  <button className="btn btn-prim" style={{width:"100%",justifyContent:"center"}} onClick={async ()=>{
+                  <button className="btn btn-prim" style={{width:"100%",justifyContent:"center"}} disabled={createBusy} onClick={async ()=>{
+                    if (createBusy) return;
                     if (!config.tournament) {
                       notify("Select a tournament first.", "error");
                       return;
@@ -3823,6 +3857,7 @@ export default function GolfPoolPro() {
                       return;
                     }
                     // Prefer backend pool creation for multi-user shared lobbies.
+                    setCreateBusy(true);
                     try {
                       const resp = await Pools.create({
                         name: config.poolName,
@@ -3872,6 +3907,8 @@ export default function GolfPoolPro() {
                       notify("Pool created! Share the invite link to get people in.");
                     } catch (e) {
                       notify(e?.message || "Could not create pool. Please try again.", "error");
+                    } finally {
+                      setCreateBusy(false);
                     }
                   }}>
                     💾 Save & Create Pool

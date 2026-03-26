@@ -8,6 +8,11 @@ const MIN_PARTICIPANTS = 2;
 const MAX_PARTICIPANTS = 12;
 const MIN_TEAM_SIZE = 4;
 const MAX_TEAM_SIZE = 12;
+const MIN_CUT_LINE = 0;
+const MAX_CUT_LINE = 12;
+const MIN_SHOT_CLOCK = 10;
+const MAX_SHOT_CLOCK = 300;
+const MAX_POOL_NAME_LENGTH = 100;
 
 function isInt(n) {
   return Number.isInteger(n) && Number.isFinite(n);
@@ -248,7 +253,8 @@ router.post("/:id/ready-all", requireAuth, async (req, res, next) => {
       .eq("pool_id", id);
     const allReady = (members?.length || 0) >= 1 && members.every((m) => m.is_ready);
     if (allReady) {
-      await sb.from("pools").update({ status: "draft" }).eq("id", id);
+      // Only advance if still in lobby to prevent race conditions
+      await sb.from("pools").update({ status: "draft" }).eq("id", id).eq("status", "lobby");
       // Fresh clock on transition.
       try {
         if (typeof draftRoutes._resetDraftRuntime === "function") {
@@ -431,11 +437,14 @@ router.post("/", requireAuth, async (req, res, next) => {
     } = req.body;
 
     if (!name?.trim()) return res.status(400).json({ error: "Pool name is required." });
+    if (name.trim().length > MAX_POOL_NAME_LENGTH) return res.status(400).json({ error: `Pool name must be ${MAX_POOL_NAME_LENGTH} characters or fewer.` });
     if (!tournament_id) return res.status(400).json({ error: "Tournament is required." });
 
     const mp = Number(max_participants);
     const ts = Number(team_size);
     const sg = Number(scoring_golfers);
+    const cl = Number(cut_line);
+    const sc = Number(shot_clock);
 
     if (!isInt(mp) || mp < MIN_PARTICIPANTS || mp > MAX_PARTICIPANTS) {
       return res.status(400).json({ error: `max_participants must be an integer between ${MIN_PARTICIPANTS} and ${MAX_PARTICIPANTS}.` });
@@ -445,6 +454,12 @@ router.post("/", requireAuth, async (req, res, next) => {
     }
     if (!isInt(sg) || sg < 1 || sg > ts) {
       return res.status(400).json({ error: "scoring_golfers must be an integer between 1 and team_size." });
+    }
+    if (!isInt(cl) || cl < MIN_CUT_LINE || cl > MAX_CUT_LINE) {
+      return res.status(400).json({ error: `cut_line must be an integer between ${MIN_CUT_LINE} and ${MAX_CUT_LINE}.` });
+    }
+    if (!isInt(sc) || sc < MIN_SHOT_CLOCK || sc > MAX_SHOT_CLOCK) {
+      return res.status(400).json({ error: `shot_clock must be an integer between ${MIN_SHOT_CLOCK} and ${MAX_SHOT_CLOCK}.` });
     }
 
     const { data: pool, error } = await sb
@@ -456,8 +471,8 @@ router.post("/", requireAuth, async (req, res, next) => {
         max_participants: mp,
         team_size: ts,
         scoring_golfers: sg,
-        cut_line,
-        shot_clock,
+        cut_line: cl,
+        shot_clock: sc,
         status: "lobby",
       })
       .select()
@@ -482,8 +497,15 @@ router.patch("/:id", requireAuth, async (req, res, next) => {
     if (!pool) return res.status(404).json({ error: "Pool not found." });
     if (pool.host_id !== req.user.id) return res.status(403).json({ error: "Only the host can edit pool settings." });
 
-    const allowed = ["name","status","max_participants","team_size","scoring_golfers","cut_line","shot_clock"];
+    const allowed = ["name","max_participants","team_size","scoring_golfers","cut_line","shot_clock"];
     const updates = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)));
+
+    if (Object.prototype.hasOwnProperty.call(updates, "name")) {
+      const trimmed = String(updates.name || "").trim();
+      if (!trimmed) return res.status(400).json({ error: "Pool name is required." });
+      if (trimmed.length > MAX_POOL_NAME_LENGTH) return res.status(400).json({ error: `Pool name must be ${MAX_POOL_NAME_LENGTH} characters or fewer.` });
+      updates.name = trimmed;
+    }
 
     if (Object.prototype.hasOwnProperty.call(updates, "max_participants")) {
       const mp = Number(updates.max_participants);
@@ -513,6 +535,22 @@ router.patch("/:id", requireAuth, async (req, res, next) => {
         return res.status(400).json({ error: "scoring_golfers must be an integer between 1 and team_size." });
       }
       updates.scoring_golfers = sg;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, "cut_line")) {
+      const cl = Number(updates.cut_line);
+      if (!isInt(cl) || cl < MIN_CUT_LINE || cl > MAX_CUT_LINE) {
+        return res.status(400).json({ error: `cut_line must be an integer between ${MIN_CUT_LINE} and ${MAX_CUT_LINE}.` });
+      }
+      updates.cut_line = cl;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, "shot_clock")) {
+      const sc = Number(updates.shot_clock);
+      if (!isInt(sc) || sc < MIN_SHOT_CLOCK || sc > MAX_SHOT_CLOCK) {
+        return res.status(400).json({ error: `shot_clock must be an integer between ${MIN_SHOT_CLOCK} and ${MAX_SHOT_CLOCK}.` });
+      }
+      updates.shot_clock = sc;
     }
 
     const { data, error } = await sb.from("pools").update(updates).eq("id", id).select().single();
@@ -587,7 +625,8 @@ router.patch("/:id/ready", requireAuth, async (req, res, next) => {
     // Allow solo pools for testing / single-player pools.
     const allReady = members?.length >= 1 && members.every(m => m.is_ready);
     if (allReady) {
-      await sb.from("pools").update({ status: "draft" }).eq("id", id);
+      // Only advance if still in lobby to prevent race conditions
+      await sb.from("pools").update({ status: "draft" }).eq("id", id).eq("status", "lobby");
     }
 
     res.json({ allReady });
@@ -598,10 +637,21 @@ router.patch("/:id/ready", requireAuth, async (req, res, next) => {
 router.get("/:id/standings", requireAuth, async (req, res, next) => {
   try {
     const sb = req.app.locals.supabase;
+    const { id } = req.params;
+
+    // Verify membership before exposing standings
+    const { data: member } = await sb
+      .from("pool_members")
+      .select("user_id")
+      .eq("pool_id", id)
+      .eq("user_id", req.user.id)
+      .single();
+    if (!member) return res.status(403).json({ error: "You are not a member of this pool." });
+
     const { data, error } = await sb
       .from("pool_standings")
       .select("*")
-      .eq("pool_id", req.params.id)
+      .eq("pool_id", id)
       .order("score", { ascending: true });
     if (error) return res.status(500).json({ error: error.message });
     res.json({ standings: data });

@@ -49,6 +49,10 @@ const supabase = createClient(
 app.locals.supabase = supabase;
 app.locals.analytics = analytics;
 
+if (!process.env.ADMIN_TOKEN) {
+  console.warn("WARNING: ADMIN_TOKEN is not set — all admin endpoints are unprotected. Set ADMIN_TOKEN in production.");
+}
+
 // Safety switch: avoid seeding fake "ranking fallback" fields unless explicitly enabled.
 const ALLOW_PROVISIONAL_FIELDS = String(process.env.ALLOW_PROVISIONAL_FIELDS || "").toLowerCase() === "true";
 
@@ -77,11 +81,35 @@ app.use("/api/auth", rateLimit({
   skipSuccessfulRequests: true,
   message: { error: "Too many attempts. Please try again in 15 minutes." }
 }));
+app.use("/api/admin", rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  message: { error: "Admin rate limit exceeded. Slow down." }
+}));
 app.use("/api", rateLimit({
   windowMs: 60 * 1000,
   max: 120,
   message: { error: "Rate limit exceeded. Slow down." }
 }));
+
+// ─── Admin auth middleware (timing-safe, rejects when token is unconfigured) ──
+function requireAdmin(req, res, next) {
+  const expected = process.env.ADMIN_TOKEN;
+  if (!expected) {
+    return res.status(403).json({ error: "Admin access is disabled (ADMIN_TOKEN not configured)." });
+  }
+  const provided = req.headers["x-admin-token"] || "";
+  if (typeof provided !== "string" || provided.length === 0) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  // Pad to equal length for timingSafeEqual (requires equal-length buffers).
+  const a = Buffer.from(expected);
+  const b = Buffer.from(provided);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  next();
+}
 
 // ─── Routes ──────────────────────────────────────────────────
 app.use("/api/auth",    authRoutes);
@@ -98,12 +126,8 @@ app.use("/api/public", publicRoutes);
 app.get("/api/health", (_req, res) => res.json({ status: "ok", ts: new Date().toISOString() }));
 
 // Admin seed endpoint for loading golfers from SportsDataIO.
-app.post("/api/admin/seed-golfers", async (req, res, next) => {
+app.post("/api/admin/seed-golfers", requireAdmin, async (req, res, next) => {
   try {
-    const required = process.env.ADMIN_TOKEN;
-    if (required && req.headers["x-admin-token"] !== required) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
     const result = await seedGolfers(supabase);
     if (result?.error) return res.status(400).json({ error: result.error });
     return res.json(result);
@@ -112,12 +136,8 @@ app.post("/api/admin/seed-golfers", async (req, res, next) => {
   }
 });
 
-app.post("/api/admin/seed-tournaments", async (req, res, next) => {
+app.post("/api/admin/seed-tournaments", requireAdmin, async (req, res, next) => {
   try {
-    const required = process.env.ADMIN_TOKEN;
-    if (required && req.headers["x-admin-token"] !== required) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
     const year = Number(req.body?.year) || new Date().getUTCFullYear();
     const result = await seedUpcomingTournaments(supabase, year);
     if (result?.error) return res.status(400).json({ error: result.error });
@@ -127,13 +147,8 @@ app.post("/api/admin/seed-tournaments", async (req, res, next) => {
   }
 });
 
-app.get("/api/admin/tournaments/suggest-map", async (req, res, next) => {
+app.get("/api/admin/tournaments/suggest-map", requireAdmin, async (req, res, next) => {
   try {
-    const required = process.env.ADMIN_TOKEN;
-    if (required && req.headers["x-admin-token"] !== required) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
-
     const today = new Date().toISOString().slice(0, 10);
     const { data: tournaments, error } = await supabase
       .from("tournaments")
@@ -1052,12 +1067,19 @@ async function fetchDataGolfFieldPlayers(tournament) {
 
   const year = String(tournament?.start_date || "").slice(0, 4) || String(new Date().getUTCFullYear());
 
+  const toNum = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
   const coercePlayers = (arr) => (arr || [])
     .map((p) => ({
       id: Number(p.dg_id || p.dgid || p.datagolf_id || p.player_id || p.id) || null,
       name: normalizePlayerName(p.player_name || p.name || p.full_name || p.player || ""),
       country: p.country || p.nationality || null,
       world_rank: Number(p.owgr || p.owgr_rank || p.world_rank || p.rank) || null,
+      sg_total: toNum(p.sg_total ?? p.sg_t ?? p.strokes_gained_total),
+      driv_dist: toNum(p.driving_dist ?? p.driv_dist ?? p.avg_distance ?? p.driving_distance),
+      driv_acc: toNum(p.driving_acc ?? p.driv_acc ?? p.fairways_hit ?? p.driving_accuracy),
+      gir: toNum(p.gir ?? p.gir_pct ?? p.greens_in_regulation),
+      putts: toNum(p.putting_avg ?? p.putts_per_round ?? p.putts),
+      scoring_avg: toNum(p.scoring_avg ?? p.scoring_average ?? p.score_avg),
     }))
     // Allow missing names as long as we have a dg_id; we can enrich from DataGolf player list.
     .filter((p) => p.id || p.name);
@@ -1697,24 +1719,42 @@ async function importFieldPlayersIntoTournament(tournamentId, players) {
     if (!name) continue;
     const k = name.toLowerCase();
     if (!uniqueByName.has(k)) {
+      const toNum = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
       uniqueByName.set(k, {
         id: Number(p.id || p.dg_id || p.dgid || p.player_id) || null,
         name,
         country: p.country || p.nationality || null,
         world_rank: Number(p.world_rank || p.rank) || null,
+        sg_total: toNum(p.sg_total ?? p.sg_t ?? p.strokes_gained_total),
+        driv_dist: toNum(p.driving_dist ?? p.driv_dist ?? p.avg_distance ?? p.driving_distance),
+        driv_acc: toNum(p.driving_acc ?? p.driv_acc ?? p.fairways_hit ?? p.driving_accuracy),
+        gir: toNum(p.gir ?? p.gir_pct ?? p.greens_in_regulation),
+        putts: toNum(p.putting_avg ?? p.putts_per_round ?? p.putts),
+        scoring_avg: toNum(p.scoring_avg ?? p.scoring_average ?? p.score_avg),
       });
     }
   }
   const normalizedPlayers = Array.from(uniqueByName.values());
   if (!normalizedPlayers.length) return { imported: 0 };
 
-  const golferRows = normalizedPlayers.map((p) => ({
-    id: Number.isFinite(Number(p.id)) && Number(p.id) > 0 ? Number(p.id) : toStableGolferId(p.name),
-    name: p.name,
-    country: p.country || null,
-    world_rank: p.world_rank || null,
-    updated_at: new Date().toISOString(),
-  }));
+  const golferRows = normalizedPlayers.map((p) => {
+    const row = {
+      id: Number.isFinite(Number(p.id)) && Number(p.id) > 0 ? Number(p.id) : toStableGolferId(p.name),
+      name: p.name,
+      country: p.country || null,
+      world_rank: p.world_rank || null,
+      updated_at: new Date().toISOString(),
+    };
+    // Only set stats columns when we actually have data, so we don't overwrite
+    // existing values with nulls on re-imports that lack stats.
+    if (p.sg_total != null) row.sg_total = p.sg_total;
+    if (p.driv_dist != null) row.driv_dist = Math.round(p.driv_dist);
+    if (p.driv_acc != null) row.driv_acc = p.driv_acc;
+    if (p.gir != null) row.gir = p.gir;
+    if (p.putts != null) row.putts = p.putts;
+    if (p.scoring_avg != null) row.scoring_avg = p.scoring_avg;
+    return row;
+  });
 
   const { error: golfersError } = await supabase
     .from("golfers")
@@ -1856,13 +1896,8 @@ async function autoSeedUpcomingFields() {
   }
 }
 
-app.post("/api/admin/import-field/:tournamentId", async (req, res, next) => {
+app.post("/api/admin/import-field/:tournamentId", requireAdmin, async (req, res, next) => {
   try {
-    const required = process.env.ADMIN_TOKEN;
-    if (required && req.headers["x-admin-token"] !== required) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
-
     const { tournamentId } = req.params;
     const players = parsePlayersFromBody(req.body);
     if (!players.length) {
@@ -1884,13 +1919,8 @@ app.post("/api/admin/import-field/:tournamentId", async (req, res, next) => {
   }
 });
 
-app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) => {
+app.post("/api/admin/import-field-auto/:tournamentId", requireAdmin, async (req, res, next) => {
   try {
-    const required = process.env.ADMIN_TOKEN;
-    if (required && req.headers["x-admin-token"] !== required) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
-
     const { tournamentId } = req.params;
     const { data: tournament } = await supabase
       .from("tournaments")
@@ -2034,13 +2064,8 @@ app.post("/api/admin/import-field-auto/:tournamentId", async (req, res, next) =>
 
 // Force-reset a tournament field shell list (tournament_scores rows) so a clean projected field can be imported.
 // Safe by default: refuses if real scoring has started, and refuses if draft picks exist unless `{"force": true}`.
-app.post("/api/admin/field-reset/:tournamentId", async (req, res, next) => {
+app.post("/api/admin/field-reset/:tournamentId", requireAdmin, async (req, res, next) => {
   try {
-    const required = process.env.ADMIN_TOKEN;
-    if (required && req.headers["x-admin-token"] !== required) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
-
     const { tournamentId } = req.params;
     const force = !!req.body?.force;
 
@@ -2118,11 +2143,7 @@ app.post("/api/admin/field-reset/:tournamentId", async (req, res, next) => {
 });
 
 // Debug endpoints to understand DataGolf payload shapes without exposing secrets.
-app.get("/api/admin/datagolf/field-updates-debug", async (req, res) => {
-  const required = process.env.ADMIN_TOKEN;
-  if (required && req.headers["x-admin-token"] !== required) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
+app.get("/api/admin/datagolf/field-updates-debug", requireAdmin, async (req, res) => {
   if (!DATAGOLF_API_KEY) return res.status(400).json({ error: "DATAGOLF_API_KEY not set." });
 
   const tour = String(req.query.tour || "pga").toLowerCase();
@@ -2222,12 +2243,7 @@ app.get("/api/admin/datagolf/field-updates-debug", async (req, res) => {
   }
 });
 
-app.get("/api/admin/datagolf/major-fields-debug", async (req, res) => {
-  const required = process.env.ADMIN_TOKEN;
-  if (required && req.headers["x-admin-token"] !== required) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
+app.get("/api/admin/datagolf/major-fields-debug", requireAdmin, async (req, res) => {
   const major = String(req.query.major || "masters").toLowerCase();
   const bust = String(req.query.bust || "").toLowerCase() === "1";
   const cacheBuster = bust ? Math.floor(Date.now() / (60 * 60 * 1000)) : null;
@@ -2266,11 +2282,7 @@ app.get("/api/admin/datagolf/major-fields-debug", async (req, res) => {
 });
 
 // ─── Admin analytics ──────────────────────────────────────────
-app.get("/api/admin/analytics", (req, res) => {
-  const required = process.env.ADMIN_TOKEN;
-  if (required && req.headers["x-admin-token"] !== required) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
+app.get("/api/admin/analytics", requireAdmin, (req, res) => {
   return res.json({
     startedAt: analytics.startedAt,
     scoreSync: analytics.scoreSync,
@@ -2283,27 +2295,31 @@ app.get("/api/admin/analytics", (req, res) => {
   });
 });
 
-app.get("/api/admin/errors", (req, res) => {
-  const required = process.env.ADMIN_TOKEN;
-  if (required && req.headers["x-admin-token"] !== required) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
+app.get("/api/admin/errors", requireAdmin, (req, res) => {
   return res.json({ recentErrors: analytics.errors.slice(-ANALYTICS_ERRORS_MAX) });
 });
 
 // ─── Global error handler ─────────────────────────────────────
 app.use((err, _req, res, _next) => {
-  console.error(err);
+  const status = err.status || err.statusCode || 500;
+  const message = String(err?.message || "Internal server error");
+  console.error(`[${new Date().toISOString()}] ${status} — ${message}`);
+  if (status >= 500) console.error(err.stack || err);
   try {
     analytics.errors.push({
       ts: new Date().toISOString(),
-      status: err?.status || 500,
-      message: String(err?.message || "Internal server error"),
+      status,
+      message,
       stack: String(err?.stack || ""),
     });
     while (analytics.errors.length > ANALYTICS_ERRORS_MAX) analytics.errors.shift();
   } catch {}
-  res.status(err.status || 500).json({ error: err.message || "Internal server error" });
+  if (res.headersSent) return;
+  const isProduction = process.env.NODE_ENV === "production";
+  const clientMessage = (isProduction && status >= 500)
+    ? "Internal server error"
+    : message;
+  res.status(status).json({ error: clientMessage });
 });
 
 // ─── Live score sync cron ─────────────────────────────────────
@@ -2333,6 +2349,59 @@ cron.schedule("0 */6 * * *", async () => {
 });
 // Kick once shortly after boot so first deploy populates quickly.
 setTimeout(() => { autoSeedUpcomingFields().catch(()=>{}); }, 25_000);
+
+// ─── Admin migration endpoint ────────────────────────────────
+// POST /api/admin/run-migrations — runs idempotent schema updates
+app.post("/api/admin/run-migrations", requireAdmin, async (_req, res) => {
+  const results = [];
+
+  // 1. Fix pool_standings view to handle NULL round scores
+  const viewSQL = `
+    CREATE OR REPLACE VIEW public.pool_standings AS
+    SELECT
+      dp.pool_id,
+      dp.user_id,
+      p.name AS player_name,
+      p.avatar,
+      po.team_size,
+      po.scoring_golfers,
+      count(dp.golfer_id) AS golfers_drafted,
+      (
+        SELECT coalesce(sum(total), 0)
+        FROM (
+          SELECT COALESCE(ts.r1, 0) + COALESCE(ts.r2, 0) + COALESCE(ts.r3, 0) + COALESCE(ts.r4, 0) AS total
+          FROM public.draft_picks dp2
+          JOIN public.tournament_scores ts
+            ON ts.golfer_id = dp2.golfer_id
+           AND ts.tournament_id = po.tournament_id
+          WHERE dp2.pool_id = dp.pool_id
+            AND dp2.user_id = dp.user_id
+          ORDER BY (COALESCE(ts.r1, 0) + COALESCE(ts.r2, 0) + COALESCE(ts.r3, 0) + COALESCE(ts.r4, 0)) ASC
+          LIMIT po.scoring_golfers
+        ) best
+      ) AS score
+    FROM public.draft_picks dp
+    JOIN public.profiles p ON p.id = dp.user_id
+    JOIN public.pools po ON po.id = dp.pool_id
+    GROUP BY dp.pool_id, dp.user_id, p.name, p.avatar, po.team_size, po.scoring_golfers, po.tournament_id;
+  `;
+
+  // 2. Add unique constraint on draft_picks(pool_id, pick_number)
+  const constraintSQL = `
+    DO $$ BEGIN
+      ALTER TABLE public.draft_picks ADD CONSTRAINT draft_picks_pool_id_pick_number_key UNIQUE (pool_id, pick_number);
+    EXCEPTION WHEN duplicate_table THEN NULL;
+    END $$;
+  `;
+
+  // Note: Supabase JS client can't run DDL directly.
+  // These must be run via the Supabase SQL Editor in the dashboard.
+  // This endpoint serves as documentation of what needs to be run.
+  results.push({ migration: "pool_standings_view", sql: viewSQL.trim(), status: "pending_manual" });
+  results.push({ migration: "draft_picks_constraint", sql: constraintSQL.trim(), status: "pending_manual" });
+  results.push({ note: "Copy and paste each SQL block into the Supabase Dashboard SQL Editor at: https://supabase.com/dashboard/project/mjzsamaxiaojnslbllth/sql" });
+  res.json({ migrations: results });
+});
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`🏌️  MyGolfPoolPro API running on port ${PORT}`));

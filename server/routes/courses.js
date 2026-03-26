@@ -215,19 +215,16 @@ async function searchCoursesDebug(query) {
   const out = [];
   for (const url of urls) {
     try {
-      const resp = await fetch(url, { headers: authHeaders(), timeout: 10000 });
-      const text = await resp.text();
-      let json = null;
-      try { json = JSON.parse(text); } catch {}
+      // Use rate-limited fetchJson instead of raw fetch
+      const json = await fetchJson(url);
       out.push({
-        url,
-        ok: resp.ok,
-        status: resp.status,
+        ok: true,
+        status: 200,
         topLevelKeys: json && typeof json === "object" ? Object.keys(json).slice(0, 20) : [],
-        preview: json || text.slice(0, 300),
+        preview: json,
       });
     } catch (e) {
-      out.push({ url, ok: false, status: 0, error: e.message });
+      out.push({ ok: false, status: e.status || 0, error: e.message });
     }
   }
   return out;
@@ -258,7 +255,9 @@ async function getCourseById(id) {
 router.get("/search", async (req, res, next) => {
   try {
     const q = String(req.query.q || "").trim();
-    if (!q) return res.status(400).json({ error: "Missing query string `q`." });
+    if (!q || q.length > 200) {
+      return res.status(400).json({ error: "Missing or oversized query string `q` (max 200 chars)." });
+    }
     if (!hasProviderCreds()) {
       return res.status(400).json({ error: "Set RAPIDAPI_KEY (+ RAPIDAPI_HOST) or GOLFCOURSE_API_KEY." });
     }
@@ -277,16 +276,20 @@ router.get("/search", async (req, res, next) => {
 router.get("/debug/search", async (req, res, next) => {
   try {
     const required = process.env.ADMIN_TOKEN;
-    if (required && req.headers["x-admin-token"] !== required) {
+    if (!required || req.headers["x-admin-token"] !== required) {
       return res.status(401).json({ error: "Unauthorized" });
     }
     const q = String(req.query.q || "").trim();
-    if (!q) return res.status(400).json({ error: "Missing query string `q`." });
+    if (!q || q.length > 200) {
+      return res.status(400).json({ error: "Missing or oversized query string `q` (max 200 chars)." });
+    }
     if (!hasProviderCreds()) {
       return res.status(400).json({ error: "Set RAPIDAPI_KEY (+ RAPIDAPI_HOST) or GOLFCOURSE_API_KEY." });
     }
     const attempts = await searchCoursesDebug(q);
-    return res.json({ provider: COURSE_PROVIDER, attempts });
+    // Strip URLs from response to avoid leaking internal base URLs
+    const sanitized = attempts.map(({ url, ...rest }) => rest);
+    return res.json({ provider: COURSE_PROVIDER, attempts: sanitized });
   } catch (e) {
     return next(e);
   }

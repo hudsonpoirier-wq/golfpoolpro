@@ -24,11 +24,16 @@ router.post("/signup", async (req, res, next) => {
     const { name, email, password } = req.body;
     if (!name?.trim() || !email?.trim() || !password)
       return res.status(400).json({ error: "Name, email and password are required." });
-    if (password.length < 6)
-      return res.status(400).json({ error: "Password must be at least 6 characters." });
+    if (password.length < 8)
+      return res.status(400).json({ error: "Password must be at least 8 characters." });
+    if (!/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password))
+      return res.status(400).json({ error: "Password must contain uppercase, lowercase, and a number." });
 
     const cleanEmail = email.trim().toLowerCase();
-    const cleanName = name.trim();
+    // Basic email format validation
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail))
+      return res.status(400).json({ error: "Invalid email format." });
+    const cleanName = name.trim().slice(0, 100); // Limit name length
     const admin = req.app.locals.supabase; // service-role client
     const sb = supabaseAuth(); // anon client for session creation
 
@@ -41,8 +46,13 @@ router.post("/signup", async (req, res, next) => {
     });
     if (createErr) {
       const msg = String(createErr.message || "").toLowerCase();
-      const status = msg.includes("rate limit") ? 429 : 400;
-      return res.status(status).json({ error: createErr.message || "Signup failed." });
+      if (msg.includes("rate limit")) {
+        return res.status(429).json({ error: "Too many attempts. Please try again later." });
+      }
+      // SECURITY: Don't forward raw Supabase error (e.g. "User already registered")
+      // as it enables user enumeration. Log it server-side for debugging.
+      console.error("[signup] Supabase createUser error (suppressed):", createErr.message);
+      return res.status(400).json({ error: "Signup failed. Please try again or use a different email." });
     }
 
     // Return a live session right away.
@@ -93,8 +103,11 @@ router.post("/login", async (req, res, next) => {
     });
     if (error) {
       const msg = String(error.message || "").toLowerCase();
-      const status = msg.includes("rate limit") ? 429 : 401;
-      return res.status(status).json({ error: error.message || "Invalid email or password." });
+      if (msg.includes("rate limit")) {
+        return res.status(429).json({ error: "Too many attempts. Please try again later." });
+      }
+      // SECURITY: Always return the same generic message to prevent user enumeration
+      return res.status(401).json({ error: "Invalid email or password." });
     }
 
     // Fetch profile
@@ -115,7 +128,9 @@ router.post("/login", async (req, res, next) => {
 router.post("/logout", requireAuth, async (req, res, next) => {
   try {
     const sb = supabaseAuth();
-    const token = req.headers.authorization.slice(7);
+    const header = req.headers.authorization || "";
+    const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+    if (!token) return res.status(401).json({ error: "Missing token." });
     await sb.auth.admin.signOut(token);
     res.json({ message: "Logged out." });
   } catch (e) { next(e); }
@@ -161,14 +176,23 @@ router.post("/forgot-password", async (req, res, next) => {
     if (!email) return res.status(400).json({ error: "Email is required." });
 
     const sb = supabaseAuth();
-    const redirectTo = req.body?.redirectTo || `${process.env.SITE_URL}/reset-password`;
+    // SECURITY: Never allow user-controlled redirectTo — always use the server's
+    // configured SITE_URL to prevent open-redirect / phishing via reset emails.
+    const redirectTo = `${process.env.SITE_URL}/reset-password`;
     // Always return 200 — don't reveal if email exists
     const { error } = await sb.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
       redirectTo,
     });
+    // SECURITY: Always return 200 with the same message regardless of whether the
+    // email exists or an error occurred. This prevents user enumeration attacks.
+    // Only surface rate-limit errors so the client can back off.
     if (error) {
-      const status = pickStatusFromSupabaseMessage(error.message, 400);
-      return res.status(status).json({ error: error.message || "Could not send reset email." });
+      const msg = String(error.message || "").toLowerCase();
+      if (msg.includes("rate limit")) {
+        return res.status(429).json({ error: "Too many requests. Please try again later." });
+      }
+      // Log the error server-side but don't expose it to the client
+      console.error("[forgot-password] Supabase error (suppressed from client):", error.message);
     }
     res.json({ message: "If that email exists, a reset link has been sent." });
   } catch (e) {
@@ -185,8 +209,10 @@ router.post("/forgot-password", async (req, res, next) => {
 router.post("/reset-password", requireAuth, async (req, res, next) => {
   try {
     const { password } = req.body;
-    if (!password || password.length < 6)
-      return res.status(400).json({ error: "Password must be at least 6 characters." });
+    if (!password || password.length < 8)
+      return res.status(400).json({ error: "Password must be at least 8 characters." });
+    if (!/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password))
+      return res.status(400).json({ error: "Password must contain uppercase, lowercase, and a number." });
 
     const admin = req.app.locals.supabase;
     const { error } = await admin.auth.admin.updateUserById(req.user.id, { password });
@@ -204,7 +230,10 @@ router.get("/me", requireAuth, async (req, res, next) => {
       .select("id, name, avatar, email, created_at")
       .eq("id", req.user.id)
       .maybeSingle();
-    if (error) return res.status(500).json({ error: error.message || "Could not load profile." });
+    if (error) {
+      console.error("[/me] profile query error:", error.message);
+      return res.status(500).json({ error: "Could not load profile." });
+    }
     if (!profile) {
       return res.json({
         user: {
@@ -235,7 +264,10 @@ router.patch("/me", requireAuth, async (req, res, next) => {
       .eq("id", req.user.id)
       .select()
       .single();
-    if (error) return res.status(400).json({ error: error.message });
+    if (error) {
+      console.error("[PATCH /me] update error:", error.message);
+      return res.status(400).json({ error: "Could not update profile." });
+    }
     res.json({ user: data });
   } catch (e) { next(e); }
 });
