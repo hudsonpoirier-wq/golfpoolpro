@@ -61,7 +61,7 @@ const THE_SPORTS_DB_KEY = process.env.THE_SPORTS_DB_KEY || "3";
 const THE_SPORTS_DB = `https://www.thesportsdb.com/api/v1/json/${THE_SPORTS_DB_KEY}`;
 const SCORE_PROVIDER = (
   process.env.SCORE_PROVIDER ||
-  (BALLDONTLIE_PGA_KEY ? "BALLDONTLIE" : "THESPORTSDB")
+  (DATAGOLF_API_KEY ? "DATAGOLF" : BALLDONTLIE_PGA_KEY ? "BALLDONTLIE" : "THESPORTSDB")
 ).toUpperCase();
 const USE_SPORTSDATAIO = String(process.env.USE_SPORTSDATAIO || "").toLowerCase() === "true";
 const AUTO_EVENT_MAP = {};
@@ -192,6 +192,14 @@ async function syncLiveScores(supabase) {
 }
 
 async function fetchScores(internalTournamentId, supabase) {
+  // DATAGOLF provider — try DataGolf first (best live data)
+  if (SCORE_PROVIDER === "DATAGOLF") {
+    const dg = await fetchDataGolfLiveScores(internalTournamentId, supabase);
+    if (dg?.length) return dg;
+    const tsdbFallback = await fetchTheSportsDbScores(internalTournamentId, supabase);
+    if (tsdbFallback?.length) return tsdbFallback;
+    return null;
+  }
   if (SCORE_PROVIDER === "BALLDONTLIE") {
     const bdl = await fetchBallDontLieScores(internalTournamentId, supabase);
     if (bdl?.length) return bdl;
@@ -210,13 +218,16 @@ async function fetchScores(internalTournamentId, supabase) {
     if (tsdb?.length) return tsdb;
     return fetchDataGolfLiveScores(internalTournamentId, supabase);
   }
+  // Default: try DataGolf first, then TheSportsDB
+  const dg = await fetchDataGolfLiveScores(internalTournamentId, supabase);
+  if (dg?.length) return dg;
   const theSportsDb = await fetchTheSportsDbScores(internalTournamentId, supabase);
   if (theSportsDb?.length) return theSportsDb;
   if (USE_SPORTSDATAIO) {
     const sd = await fetchSportsDataScores(internalTournamentId, supabase);
     if (sd?.length) return sd;
   }
-  return fetchDataGolfLiveScores(internalTournamentId, supabase);
+  return null;
 }
 
 function normalizeScoreRow(raw) {
