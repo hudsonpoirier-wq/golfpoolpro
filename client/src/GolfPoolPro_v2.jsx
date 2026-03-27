@@ -3748,13 +3748,11 @@ export default function GolfPoolPro() {
                                 const allTots=liveScores.map(s=>sumRounds(s)).filter(v=>v!==null);
                                 if(allTots.length<4) return null;
                                 const mn=Math.min(...allTots), mx=Math.max(...allTots);
-                                const bucketSize=Math.max(1,Math.ceil((mx-mn)/8));
                                 const buckets=[];
-                                for(let b=mn;b<=mx;b+=bucketSize){
-                                  const lo=b, hi=b+bucketSize;
-                                  const cnt=allTots.filter(v=>v>=lo&&v<hi).length;
-                                  const label=lo>=0?`+${lo}`:`${lo}`;
-                                  const hasTeam=myTeam.some(g=>{const s=liveScores.find(l=>l.gId===g.id);const t=sumRounds(s);return t!==null&&t>=lo&&t<hi;});
+                                for(let score=mn;score<=mx;score++){
+                                  const cnt=allTots.filter(v=>v===score).length;
+                                  const label=score>0?`+${score}`:score===0?"E":`${score}`;
+                                  const hasTeam=myTeam.some(g=>{const s=liveScores.find(l=>l.gId===g.id);return sumRounds(s)===score;});
                                   buckets.push({range:label,count:cnt,hasTeam});
                                 }
                                 return (
