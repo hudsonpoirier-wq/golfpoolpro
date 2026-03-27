@@ -127,6 +127,22 @@ app.use("/api/admin-panel", adminPanelRoutes);
 // Health check
 app.get("/api/health", (_req, res) => res.json({ status: "ok", ts: new Date().toISOString() }));
 
+// Admin: create a user (one-time setup)
+app.post("/api/admin/create-user", requireAdmin, async (req, res, next) => {
+  try {
+    const { email, password, name } = req.body;
+    if (!email || !password) return res.status(400).json({ error: "email and password required" });
+    const { data, error } = await supabase.auth.admin.createUser({
+      email: email.trim().toLowerCase(),
+      password,
+      email_confirm: true,
+      user_metadata: { name: name || email.split("@")[0] },
+    });
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ user: { id: data.user.id, email: data.user.email } });
+  } catch (e) { next(e); }
+});
+
 // Admin seed endpoint for loading golfers from SportsDataIO.
 app.post("/api/admin/seed-golfers", requireAdmin, async (req, res, next) => {
   try {
