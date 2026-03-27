@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Golfers, Courses, Invites, Auth, Pools, Draft, session as apiSession, token as apiToken } from "./api";
+import { Golfers, Courses, Invites, Auth, Pools, Draft, AdminPanel, session as apiSession, token as apiToken } from "./api";
 import {
   AreaChart, Area, LineChart, Line, BarChart, Bar,
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
@@ -738,7 +738,7 @@ const safeRender = (fn) => { try { return fn(); } catch(e) { console.error("[saf
 /* ─── MAIN APP ─── */
 export default function GolfPoolPro() {
   const [view,setView] = useState(()=> LS.get("mgpp_session", null) ? "home" : "invite");
-  const adminTab = "config";
+  const poolAdminTab = "config";
   const [analyticsTab,setAnalyticsTab] = useState("leaderboard");
   const [statsTab,setStatsTab] = useState("overview");
   const [statsPlayer,setStatsPlayer] = useState(null);
@@ -806,6 +806,51 @@ export default function GolfPoolPro() {
   const resetPassConfirmRef = useRef(null);
   const userMenuRef = useRef(null);
   const chatEndRef = useRef(null);
+
+  // Admin panel state
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminData, setAdminData] = useState({ users: null, stats: null, apiHealth: null, pools: null });
+  const [adminTab, setAdminTab] = useState("users");
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminDeleteBusy, setAdminDeleteBusy] = useState(null);
+  const [adminConfirmDelete, setAdminConfirmDelete] = useState(null);
+
+  // Check admin status on login
+  useEffect(() => {
+    if (!currentUser) { setIsAdmin(false); return; }
+    AdminPanel.check().then(d => setIsAdmin(!!d?.isAdmin)).catch(() => setIsAdmin(false));
+  }, [currentUser]);
+
+  const loadAdminData = useCallback(async () => {
+    if (!isAdmin) return;
+    setAdminLoading(true);
+    try {
+      const [users, stats, apiHealth, pools] = await Promise.all([
+        AdminPanel.users().catch(() => null),
+        AdminPanel.stats().catch(() => null),
+        AdminPanel.apiHealth().catch(() => null),
+        AdminPanel.pools().catch(() => null),
+      ]);
+      setAdminData({ users, stats, apiHealth, pools });
+    } catch {}
+    setAdminLoading(false);
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (view === "admin" && isAdmin) loadAdminData();
+  }, [view, isAdmin, loadAdminData]);
+
+  const handleAdminDeleteUser = async (userId) => {
+    setAdminDeleteBusy(userId);
+    try {
+      await AdminPanel.deleteUser(userId);
+      setAdminConfirmDelete(null);
+      loadAdminData();
+    } catch (e) {
+      alert(e.message || "Failed to delete user");
+    }
+    setAdminDeleteBusy(null);
+  };
 
   const handleAuthEnter = (e, { nextRef = null, submit = null } = {}) => {
     if (e.key !== "Enter") return;
@@ -2275,9 +2320,20 @@ export default function GolfPoolPro() {
         {view!=="invite" && (
           <>
           <nav className="nav">
-            <button className="nav-home-btn" type="button" onClick={()=>{setView("home");setActivePool(null);}} aria-label="Home">
-              Home
-            </button>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <button className="nav-home-btn" type="button" onClick={()=>{setView("home");setActivePool(null);}} aria-label="Home">
+                Home
+              </button>
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={()=>{setView("admin");setActivePool(null);setAdminTab("users");}}
+                  style={{background:view==="admin"?"rgba(255,255,255,.15)":"transparent",border:"1px solid rgba(255,255,255,.2)",color:"#FFD700",fontSize:12,fontWeight:700,padding:"6px 14px",borderRadius:8,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",display:"flex",alignItems:"center",gap:5,letterSpacing:".3px"}}
+                >
+                  <span style={{fontSize:14}}>&#9881;</span> Admin
+                </button>
+              )}
+            </div>
             <div style={{display:"flex",alignItems:"center",gap:8,position:"relative"}} ref={userMenuRef}>
               <button
                 type="button"
@@ -2376,6 +2432,295 @@ export default function GolfPoolPro() {
             );
           })()}
           </>
+        )}
+
+        {/* ──────── ADMIN PANEL ──────── */}
+        {view==="admin" && isAdmin && (
+          <div className="page" style={{paddingTop:80,maxWidth:1100,margin:"0 auto"}}>
+            <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:24}}>
+              <h2 className="h2" style={{color:"var(--forest)"}}>Admin Panel</h2>
+              <button className="btn btn-sm" onClick={loadAdminData} disabled={adminLoading} style={{fontSize:11,padding:"5px 12px"}}>
+                {adminLoading ? "Loading..." : "Refresh"}
+              </button>
+            </div>
+
+            {/* Admin tabs */}
+            <div style={{display:"flex",gap:4,marginBottom:20,flexWrap:"wrap"}}>
+              {[["users","Users"],["stats","Platform Stats"],["api","API Health"],["pools","All Pools"]].map(([k,label])=>(
+                <button key={k} className={`btn btn-sm ${adminTab===k?"":"btn-ghost"}`}
+                  onClick={()=>setAdminTab(k)}
+                  style={{fontSize:12,padding:"7px 16px",fontWeight:adminTab===k?700:500,
+                    background:adminTab===k?"var(--forest)":"transparent",
+                    color:adminTab===k?"#fff":"var(--forest)",
+                    border:`1px solid ${adminTab===k?"var(--forest)":"rgba(27,67,50,.2)"}`,
+                    borderRadius:8}}
+                >{label}</button>
+              ))}
+            </div>
+
+            {/* ── USERS TAB ── */}
+            {adminTab==="users" && (
+              <div className="card" style={{padding:0,overflow:"hidden"}}>
+                <div style={{padding:"16px 20px",borderBottom:"1px solid rgba(27,67,50,.08)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <h3 className="h3" style={{fontSize:15}}>All Users ({adminData.users?.total || 0})</h3>
+                </div>
+                {!adminData.users ? (
+                  <div style={{padding:32,textAlign:"center",color:"#888"}}>Loading...</div>
+                ) : (
+                  <div style={{overflowX:"auto"}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                      <thead>
+                        <tr style={{background:"rgba(27,67,50,.04)",textAlign:"left"}}>
+                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)"}}>Name</th>
+                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)"}}>Email</th>
+                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Pools</th>
+                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Hosted</th>
+                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Picks</th>
+                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)"}}>Joined</th>
+                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Role</th>
+                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(adminData.users?.users || []).map(u => (
+                          <tr key={u.id} style={{borderTop:"1px solid rgba(27,67,50,.06)"}}>
+                            <td style={{padding:"10px 14px",fontWeight:600}}>{u.name}</td>
+                            <td style={{padding:"10px 14px",color:"#555",fontSize:12}}>{u.email}</td>
+                            <td style={{padding:"10px 14px",textAlign:"center"}}>{u.pools_joined}</td>
+                            <td style={{padding:"10px 14px",textAlign:"center"}}>{u.pools_hosted}</td>
+                            <td style={{padding:"10px 14px",textAlign:"center"}}>{u.total_picks}</td>
+                            <td style={{padding:"10px 14px",fontSize:12,color:"#888"}}>{u.created_at ? new Date(u.created_at).toLocaleDateString() : "—"}</td>
+                            <td style={{padding:"10px 14px",textAlign:"center"}}>
+                              {u.is_admin ? (
+                                <span style={{background:"#FFD700",color:"#1B4332",padding:"2px 8px",borderRadius:6,fontSize:10,fontWeight:700,letterSpacing:".5px"}}>ADMIN</span>
+                              ) : (
+                                <span style={{color:"#888",fontSize:11}}>User</span>
+                              )}
+                            </td>
+                            <td style={{padding:"10px 14px",textAlign:"center"}}>
+                              {u.is_admin ? (
+                                <span style={{color:"#aaa",fontSize:11}}>—</span>
+                              ) : adminConfirmDelete === u.id ? (
+                                <div style={{display:"flex",gap:4,justifyContent:"center"}}>
+                                  <button
+                                    className="btn btn-sm"
+                                    disabled={adminDeleteBusy===u.id}
+                                    onClick={()=>handleAdminDeleteUser(u.id)}
+                                    style={{background:"#DC2626",color:"#fff",border:"none",fontSize:10,padding:"4px 10px",borderRadius:6}}
+                                  >{adminDeleteBusy===u.id ? "..." : "Confirm"}</button>
+                                  <button
+                                    className="btn btn-sm btn-ghost"
+                                    onClick={()=>setAdminConfirmDelete(null)}
+                                    style={{fontSize:10,padding:"4px 8px",borderRadius:6}}
+                                  >Cancel</button>
+                                </div>
+                              ) : (
+                                <button
+                                  className="btn btn-sm"
+                                  onClick={()=>setAdminConfirmDelete(u.id)}
+                                  style={{background:"transparent",color:"#DC2626",border:"1px solid #DC2626",fontSize:10,padding:"4px 10px",borderRadius:6,cursor:"pointer"}}
+                                >Delete</button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── PLATFORM STATS TAB ── */}
+            {adminTab==="stats" && (
+              <div>
+                {!adminData.stats ? (
+                  <div style={{padding:32,textAlign:"center",color:"#888"}}>Loading...</div>
+                ) : (
+                  <div className="g2" style={{gap:16}}>
+                    {/* Stat cards */}
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:12}}>
+                      {[
+                        {label:"Total Users",value:adminData.stats.users?.total,color:"#1B4332"},
+                        {label:"New This Week",value:adminData.stats.users?.recentSignups,color:"#16A34A"},
+                        {label:"Total Pools",value:adminData.stats.pools?.total,color:"#2563EB"},
+                        {label:"Active Pools",value:adminData.stats.pools?.active,color:"#7C3AED"},
+                        {label:"Tournaments",value:adminData.stats.tournaments?.total,color:"#EA580C"},
+                        {label:"Active Tournaments",value:adminData.stats.tournaments?.active,color:"#DC2626"},
+                        {label:"Total Scores",value:adminData.stats.scores?.total,color:"#0891B2"},
+                        {label:"Golfers in DB",value:adminData.stats.golfers?.total,color:"#4F46E5"},
+                        {label:"Draft Picks Made",value:adminData.stats.picks?.total,color:"#BE185D"},
+                      ].map((s,i)=>(
+                        <div key={i} className="card" style={{padding:"16px 18px",textAlign:"center"}}>
+                          <div style={{fontSize:28,fontWeight:800,color:s.color,fontFamily:"'DM Sans',sans-serif"}}>{s.value ?? "—"}</div>
+                          <div style={{fontSize:11,color:"#888",fontWeight:600,marginTop:4,letterSpacing:".3px"}}>{s.label}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Pool status breakdown */}
+                    <div className="card" style={{marginTop:12}}>
+                      <h3 className="h3" style={{fontSize:14,marginBottom:12}}>Pool Status Breakdown</h3>
+                      <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+                        {Object.entries(adminData.stats.pools?.byStatus || {}).map(([status,count])=>(
+                          <div key={status} style={{display:"flex",alignItems:"center",gap:6}}>
+                            <span style={{
+                              display:"inline-block",width:10,height:10,borderRadius:"50%",
+                              background:status==="lobby"?"#F59E0B":status==="draft"?"#3B82F6":status==="live"?"#16A34A":"#6B7280"
+                            }}/>
+                            <span style={{fontSize:13,fontWeight:600,textTransform:"capitalize"}}>{status}</span>
+                            <span style={{fontSize:13,color:"#888"}}>({count})</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Server info */}
+                    <div className="card" style={{marginTop:12}}>
+                      <h3 className="h3" style={{fontSize:14,marginBottom:12}}>Server Info</h3>
+                      <div style={{fontSize:12,color:"#555",lineHeight:1.8}}>
+                        <div><strong>Server Started:</strong> {adminData.stats.server?.startedAt ? new Date(adminData.stats.server.startedAt).toLocaleString() : "—"}</div>
+                        <div><strong>Last Score Sync:</strong> {adminData.stats.server?.scoreSync?.lastRunAt ? new Date(adminData.stats.server.scoreSync.lastRunAt).toLocaleString() : "Never"}</div>
+                        <div><strong>Last Successful Sync:</strong> {adminData.stats.server?.scoreSync?.lastOkAt ? new Date(adminData.stats.server.scoreSync.lastOkAt).toLocaleString() : "Never"}</div>
+                        {adminData.stats.server?.scoreSync?.lastError && (
+                          <div style={{color:"#DC2626",marginTop:6}}><strong>Last Error:</strong> {adminData.stats.server.scoreSync.lastError}</div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Recent errors */}
+                    {(adminData.stats.server?.recentErrors || []).length > 0 && (
+                      <div className="card" style={{marginTop:12}}>
+                        <h3 className="h3" style={{fontSize:14,marginBottom:12,color:"#DC2626"}}>Recent Errors ({adminData.stats.server.recentErrors.length})</h3>
+                        <div style={{maxHeight:300,overflow:"auto"}}>
+                          {adminData.stats.server.recentErrors.slice().reverse().map((err,i)=>(
+                            <div key={i} style={{padding:"8px 0",borderBottom:"1px solid rgba(0,0,0,.06)",fontSize:11}}>
+                              <span style={{color:"#888"}}>{new Date(err.ts).toLocaleString()}</span>
+                              <span style={{color:"#DC2626",marginLeft:8,fontWeight:600}}>[{err.status}]</span>
+                              <span style={{marginLeft:6}}>{err.message}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── API HEALTH TAB ── */}
+            {adminTab==="api" && (
+              <div>
+                {!adminData.apiHealth ? (
+                  <div style={{padding:32,textAlign:"center",color:"#888"}}>Loading...</div>
+                ) : (
+                  <div style={{display:"grid",gap:16}}>
+                    {/* API status cards */}
+                    {[
+                      {name:"Supabase (Database)",data:adminData.apiHealth.supabase},
+                      {name:"DataGolf API",data:adminData.apiHealth.dataGolf},
+                      {name:"TheSportsDB",data:adminData.apiHealth.theSportsDB},
+                    ].map(({name,data})=>(
+                      <div key={name} className="card" style={{padding:"18px 22px"}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                          <h3 style={{fontSize:15,fontWeight:700,color:"var(--forest)"}}>{name}</h3>
+                          <span style={{
+                            display:"inline-flex",alignItems:"center",gap:5,padding:"4px 12px",borderRadius:20,fontSize:11,fontWeight:700,letterSpacing:".3px",
+                            background:data?.status==="ok"?"#DCFCE7":data?.status==="not_configured"?"#FEF3C7":"#FEE2E2",
+                            color:data?.status==="ok"?"#166534":data?.status==="not_configured"?"#92400E":"#991B1B"
+                          }}>
+                            <span style={{width:7,height:7,borderRadius:"50%",
+                              background:data?.status==="ok"?"#16A34A":data?.status==="not_configured"?"#F59E0B":"#DC2626"
+                            }}/>
+                            {data?.status === "ok" ? "Healthy" : data?.status === "not_configured" ? "Not Configured" : "Error"}
+                          </span>
+                        </div>
+                        <div style={{fontSize:12,color:"#555",lineHeight:1.8}}>
+                          {data?.latencyMs != null && <div><strong>Latency:</strong> {data.latencyMs}ms</div>}
+                          {data?.httpStatus != null && <div><strong>HTTP Status:</strong> {data.httpStatus}</div>}
+                          {data?.eventsReturned != null && <div><strong>Events Returned:</strong> {data.eventsReturned}</div>}
+                          {data?.error && <div style={{color:"#DC2626"}}><strong>Error:</strong> {data.error}</div>}
+                        </div>
+                      </div>
+                    ))}
+
+                    {/* Score Sync status */}
+                    <div className="card" style={{padding:"18px 22px"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                        <h3 style={{fontSize:15,fontWeight:700,color:"var(--forest)"}}>Score Sync Engine</h3>
+                        <span style={{
+                          display:"inline-flex",alignItems:"center",gap:5,padding:"4px 12px",borderRadius:20,fontSize:11,fontWeight:700,
+                          background:adminData.apiHealth.scoreSync?.lastError?"#FEE2E2":"#DCFCE7",
+                          color:adminData.apiHealth.scoreSync?.lastError?"#991B1B":"#166534"
+                        }}>
+                          <span style={{width:7,height:7,borderRadius:"50%",
+                            background:adminData.apiHealth.scoreSync?.lastError?"#DC2626":"#16A34A"
+                          }}/>
+                          {adminData.apiHealth.scoreSync?.lastError ? "Error" : "Running"}
+                        </span>
+                      </div>
+                      <div style={{fontSize:12,color:"#555",lineHeight:1.8}}>
+                        <div><strong>Provider:</strong> {adminData.apiHealth.scoreSync?.provider || "—"}</div>
+                        <div><strong>Last Run:</strong> {adminData.apiHealth.scoreSync?.lastRunAt ? new Date(adminData.apiHealth.scoreSync.lastRunAt).toLocaleString() : "Never"}</div>
+                        <div><strong>Last Success:</strong> {adminData.apiHealth.scoreSync?.lastOkAt ? new Date(adminData.apiHealth.scoreSync.lastOkAt).toLocaleString() : "Never"}</div>
+                        {adminData.apiHealth.scoreSync?.lastError && (
+                          <div style={{color:"#DC2626",marginTop:4}}><strong>Error:</strong> {adminData.apiHealth.scoreSync.lastError}</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── ALL POOLS TAB ── */}
+            {adminTab==="pools" && (
+              <div className="card" style={{padding:0,overflow:"hidden"}}>
+                <div style={{padding:"16px 20px",borderBottom:"1px solid rgba(27,67,50,.08)"}}>
+                  <h3 className="h3" style={{fontSize:15}}>All Pools ({adminData.pools?.total || 0})</h3>
+                </div>
+                {!adminData.pools ? (
+                  <div style={{padding:32,textAlign:"center",color:"#888"}}>Loading...</div>
+                ) : (
+                  <div style={{overflowX:"auto"}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                      <thead>
+                        <tr style={{background:"rgba(27,67,50,.04)",textAlign:"left"}}>
+                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)"}}>Pool Name</th>
+                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)"}}>Host</th>
+                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Status</th>
+                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Members</th>
+                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Max</th>
+                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)"}}>Created</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(adminData.pools?.pools || []).map(p => (
+                          <tr key={p.id} style={{borderTop:"1px solid rgba(27,67,50,.06)"}}>
+                            <td style={{padding:"10px 14px",fontWeight:600}}>{p.name}</td>
+                            <td style={{padding:"10px 14px",fontSize:12}}>
+                              <div>{p.host_name}</div>
+                              <div style={{color:"#888",fontSize:11}}>{p.host_email}</div>
+                            </td>
+                            <td style={{padding:"10px 14px",textAlign:"center"}}>
+                              <span style={{
+                                padding:"3px 10px",borderRadius:6,fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",
+                                background:p.status==="lobby"?"#FEF3C7":p.status==="draft"?"#DBEAFE":p.status==="live"?"#DCFCE7":"#F3F4F6",
+                                color:p.status==="lobby"?"#92400E":p.status==="draft"?"#1E40AF":p.status==="live"?"#166534":"#4B5563"
+                              }}>{p.status}</span>
+                            </td>
+                            <td style={{padding:"10px 14px",textAlign:"center"}}>{p.member_count}</td>
+                            <td style={{padding:"10px 14px",textAlign:"center"}}>{p.max_participants}</td>
+                            <td style={{padding:"10px 14px",fontSize:12,color:"#888"}}>{p.created_at ? new Date(p.created_at).toLocaleDateString() : "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         )}
 
         {/* ──────── HOME PAGE ──────── */}
@@ -4245,7 +4590,7 @@ export default function GolfPoolPro() {
                 <p className="sub">Configure your pool here. Invite links are available after the pool is created.</p>
               </div>
             </div>
-            {adminTab==="config" && (
+            {poolAdminTab==="config" && (
               <div className="g2" style={{maxWidth:920}}>
                 <div className="card">
                   <h3 className="h3" style={{marginBottom:18}}>Pool Settings</h3>
@@ -4423,7 +4768,7 @@ export default function GolfPoolPro() {
               </div>
             )}
 
-            {adminTab==="participants" && (
+            {poolAdminTab==="participants" && (
               <div style={{maxWidth:680}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
                   <div>
@@ -4446,7 +4791,7 @@ export default function GolfPoolPro() {
               </div>
             )}
 
-            {adminTab==="links" && (
+            {poolAdminTab==="links" && (
               <div style={{maxWidth:660}}>
                 <div className="card" style={{marginBottom:16,border:"2px solid var(--gold-pale)"}}>
                   <div style={{display:"flex",gap:14,alignItems:"flex-start",marginBottom:18}}>

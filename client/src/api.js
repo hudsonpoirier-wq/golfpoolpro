@@ -291,6 +291,26 @@ export const Draft = {
 
 
 // ════════════════════════════════════════════════════════════
+// ADMIN PANEL
+// ════════════════════════════════════════════════════════════
+
+export const AdminPanel = {
+  /** Check if current user is admin */
+  check: () => get("/api/admin-panel/check"),
+  /** List all users with stats */
+  users: () => get("/api/admin-panel/users"),
+  /** Delete a user */
+  deleteUser: (userId) => del(`/api/admin-panel/users/${encodeURIComponent(userId)}`),
+  /** Get platform stats */
+  stats: () => get("/api/admin-panel/stats"),
+  /** Check API health */
+  apiHealth: () => get("/api/admin-panel/api-health"),
+  /** List all pools */
+  pools: () => get("/api/admin-panel/pools"),
+};
+
+
+// ════════════════════════════════════════════════════════════
 // HASH ROUTING — invite link detection
 // ════════════════════════════════════════════════════════════
 

@@ -28,6 +28,7 @@ const draftRoutes   = require("./routes/draft");
 const tournamentRoutes = require("./routes/tournaments");
 const courseRoutes = require("./routes/courses");
 const publicRoutes = require("./routes/public");
+const adminPanelRoutes = require("./routes/admin-panel");
 const { syncLiveScores, seedGolfers, resolveTheSportsDbEventId } = require("./services/scoresSync");
 const { seedUpcomingTournaments } = require("./services/tournamentSync");
 
@@ -121,6 +122,7 @@ app.use("/api/draft",   draftRoutes);
 app.use("/api/tournaments", tournamentRoutes);
 app.use("/api/courses", courseRoutes);
 app.use("/api/public", publicRoutes);
+app.use("/api/admin-panel", adminPanelRoutes);
 
 // Health check
 app.get("/api/health", (_req, res) => res.json({ status: "ok", ts: new Date().toISOString() }));
