@@ -38,7 +38,8 @@ router.post("/signup", async (req, res, next) => {
     const sb = supabaseAuth(); // anon client for session creation
 
     // Create + auto-confirm so users can log in immediately (no email verification gate).
-    const { data: created, error: createErr } = await admin.auth.admin.createUser({
+    let created = null;
+    const { data: adminCreated, error: createErr } = await admin.auth.admin.createUser({
       email: cleanEmail,
       password,
       email_confirm: true,
@@ -49,10 +50,23 @@ router.post("/signup", async (req, res, next) => {
       if (msg.includes("rate limit")) {
         return res.status(429).json({ error: "Too many attempts. Please try again later." });
       }
-      // SECURITY: Don't forward raw Supabase error (e.g. "User already registered")
-      // as it enables user enumeration. Log it server-side for debugging.
-      console.error("[signup] Supabase createUser error (suppressed):", createErr.message);
-      return res.status(400).json({ error: "Signup failed. Please try again or use a different email." });
+      console.error("[signup] admin.createUser failed:", createErr.message, "— trying signUp fallback");
+      // Fallback: use public signUp
+      const { data: signUpData, error: signUpErr } = await sb.auth.signUp({
+        email: cleanEmail,
+        password,
+        options: { data: { name: cleanName } },
+      });
+      if (signUpErr) {
+        console.error("[signup] signUp fallback also failed:", signUpErr.message);
+        return res.status(400).json({ error: "Signup failed. Please try again or use a different email." });
+      }
+      created = signUpData?.user ? { user: signUpData.user } : null;
+      if (!created) {
+        return res.status(400).json({ error: "Signup failed. Please try again or use a different email." });
+      }
+    } else {
+      created = adminCreated;
     }
 
     // Return a live session right away.

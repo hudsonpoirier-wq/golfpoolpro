@@ -132,14 +132,34 @@ app.post("/api/admin/create-user", requireAdmin, async (req, res, next) => {
   try {
     const { email, password, name } = req.body;
     if (!email || !password) return res.status(400).json({ error: "email and password required" });
+
+    // Try auth.admin first
     const { data, error } = await supabase.auth.admin.createUser({
       email: email.trim().toLowerCase(),
       password,
       email_confirm: true,
       user_metadata: { name: name || email.split("@")[0] },
     });
-    if (error) return res.status(400).json({ error: error.message });
-    res.json({ user: { id: data.user.id, email: data.user.email } });
+    if (error) {
+      // Fallback: try public signUp + auto-confirm
+      console.error("[create-user] admin.createUser failed:", error.message, "— trying signUp fallback");
+      const { createClient } = require("@supabase/supabase-js");
+      const anonClient = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+      const { data: signUpData, error: signUpErr } = await anonClient.auth.signUp({
+        email: email.trim().toLowerCase(),
+        password,
+        options: { data: { name: name || email.split("@")[0] } },
+      });
+      if (signUpErr) {
+        return res.status(400).json({ error: signUpErr.message, adminError: error.message });
+      }
+      // Auto-confirm via admin
+      if (signUpData?.user?.id) {
+        await supabase.auth.admin.updateUser(signUpData.user.id, { email_confirm: true }).catch(() => {});
+      }
+      return res.json({ user: { id: signUpData?.user?.id, email: signUpData?.user?.email }, method: "signUp_fallback" });
+    }
+    res.json({ user: { id: data.user.id, email: data.user.email }, method: "admin" });
   } catch (e) { next(e); }
 });
 
