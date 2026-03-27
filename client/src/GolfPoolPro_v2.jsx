@@ -3257,10 +3257,6 @@ export default function GolfPoolPro() {
                               </div>
                             );
                           })}
-                          <div style={{marginTop:10,display:"flex",justifyContent:"space-between",gap:10,fontSize:12,color:"var(--muted)"}}>
-                            <span>Birdies {p.bonusBirdies || 0}</span>
-                            <span>Eagles {p.bonusEagles || 0}</span>
-                          </div>
                           <div style={{marginTop:10,background:p.cutMade>=activePool.cutLine?"#DCFCE7":"#FEE2E2",borderRadius:7,padding:"7px 10px",display:"flex",justifyContent:"space-between",fontSize:12}}>
                             <span>{p.cutMade} made cut (need {activePool.cutLine})</span>
                             <span style={{fontWeight:700,color:p.eligible?"var(--green)":"var(--red)"}}>{p.eligible?"✓ Eligible":"✗ Out"}</span>
