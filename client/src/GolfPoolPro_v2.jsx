@@ -3810,7 +3810,10 @@ export default function GolfPoolPro() {
                               {/* Cumulative Team Score Area Chart */}
                               {(()=>{
                                 const roundLabels=["R1","R2","R3","R4"];
-                                const areaData=roundLabels.map((r,ri)=>{
+                                const areaData=[];
+                                let cumTeam=0, cumField=0;
+                                for(let ri=0;ri<roundLabels.length;ri++){
+                                  const r=roundLabels[ri];
                                   let teamSum=0, fieldSum=0, fieldCount=0;
                                   myTeam.forEach(g=>{
                                     const ls=liveScores.find(l=>l.gId===g.id);
@@ -3820,11 +3823,9 @@ export default function GolfPoolPro() {
                                     if(s[r]!==null&&s[r]!==undefined){fieldSum+=s[r];fieldCount++;}
                                   });
                                   const fieldAvg=fieldCount?Math.round((fieldSum/fieldCount)*10)/10:0;
-                                  // Cumulative
-                                  const prevTeam=ri>0?areaData[ri-1]?.team||0:0;
-                                  const prevField=ri>0?areaData[ri-1]?.field||0:0;
-                                  return {round:r,team:prevTeam+teamSum,field:prevField+fieldAvg};
-                                });
+                                  cumTeam+=teamSum; cumField+=fieldAvg;
+                                  areaData.push({round:r,team:cumTeam,field:cumField});
+                                }
                                 if(!areaData.some(d=>d.team!==0)) return null;
                                 return (
                                   <div className="card" style={{marginTop:0}}>
