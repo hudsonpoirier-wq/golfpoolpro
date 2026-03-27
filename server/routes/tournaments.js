@@ -12,10 +12,11 @@ router.get("/future", async (_req, res, next) => {
     const today = new Date().toISOString().slice(0, 10);
     const minRows = Number(process.env.MIN_TOURNAMENT_ROWS || 12);
 
+    // Return active tournaments (in progress) + upcoming tournaments (future start_date)
     const query = () => sb
       .from("tournaments")
       .select("id, name, venue, start_date, end_date, purse, field_size, status")
-      .gte("start_date", today)
+      .or(`start_date.gte.${today},status.eq.active`)
       .order("start_date", { ascending: true });
     let { data, error } = await query();
     if (error) return res.status(500).json({ error: error.message });
