@@ -1129,7 +1129,9 @@ export default function GolfPoolPro() {
 	          bogeys: s.bogeys || [0,0,0,0],
 	        })));
         setLastUpdated(new Date());
-      } catch {}
+      } catch (err) {
+        console.error("[score-refresh] Failed to fetch scores:", err?.message || err);
+      }
     };
 
     const scheduleNextRefresh = () => {
