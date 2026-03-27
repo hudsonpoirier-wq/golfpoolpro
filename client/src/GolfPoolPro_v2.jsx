@@ -709,6 +709,32 @@ function ShotClock({total,time}) {
   );
 }
 
+/* ─── ERROR BOUNDARY ─── */
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+  static getDerivedStateFromError(error) { return { hasError: true, error }; }
+  componentDidCatch(error, info) { console.error("[ErrorBoundary]", error, info); }
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback || (
+        <div style={{padding:20,textAlign:"center",color:"#78716C",fontSize:13}}>
+          <p style={{marginBottom:8}}>Something went wrong.</p>
+          <button onClick={()=>this.setState({hasError:false,error:null})} style={{padding:"6px 14px",borderRadius:6,border:"1px solid #ccc",background:"#fff",cursor:"pointer",fontSize:12}}>Try Again</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+const SafeChart = ({ children, fallback }) => (
+  <ErrorBoundary fallback={fallback || <div style={{padding:20,textAlign:"center",color:"#78716C",fontSize:12}}>Chart unavailable</div>}>
+    {children}
+  </ErrorBoundary>
+);
+
+const safeRender = (fn) => { try { return fn(); } catch(e) { console.error("[safeRender]",e); return null; } };
+
 /* ─── MAIN APP ─── */
 export default function GolfPoolPro() {
   const [view,setView] = useState(()=> LS.get("mgpp_session", null) ? "home" : "invite");
@@ -2203,6 +2229,7 @@ export default function GolfPoolPro() {
 
   /* ─── RENDER ─── */
   return (
+    <ErrorBoundary fallback={<div style={{padding:40,textAlign:"center"}}><h2 style={{marginBottom:12}}>Something went wrong</h2><button onClick={()=>window.location.reload()} style={{padding:"10px 20px",borderRadius:8,border:"none",background:"#1B4332",color:"#fff",cursor:"pointer",fontSize:14}}>Reload App</button></div>}>
     <>
       <style>{CSS}</style>
       {notification && (
@@ -2414,7 +2441,7 @@ export default function GolfPoolPro() {
 
         {/* ──────── POOL VIEW (Lobby → Draft → Live) ──────── */}
         {view==="pool" && activePool && (
-          <div>
+          <ErrorBoundary><div>
             {/* Pool header bar */}
 	            <div style={{background:"var(--forest)",padding:"16px 28px",display:"flex",alignItems:"center",gap:16}}>
 	              <button className="btn btn-sm" style={{background:"rgba(255,255,255,.1)",color:"#fff",border:"1px solid rgba(255,255,255,.2)"}} onClick={()=>{setView("home");setActivePool(null);setConfirmDelete(false);}}>← Back</button>
@@ -4660,12 +4687,12 @@ export default function GolfPoolPro() {
               )}
 
             </div>
-          </div>
+          </div></ErrorBoundary>
         )}
 
         {/* ──────── ANALYTICS (Global / standalone view) ──────── */}
         {view==="analytics" && (
-          <div className="page">
+          <ErrorBoundary><div className="page">
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:10}}>
               <div>
                 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4}}>
@@ -4822,12 +4849,12 @@ export default function GolfPoolPro() {
               </div>
               );
             })()}
-          </div>
+          </div></ErrorBoundary>
         )}
 
         {/* ──────── STATISTICS ──────── */}
         {view==="stats" && (
-          <div className="page">
+          <ErrorBoundary><div className="page">
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:10}}>
               <div>
                 <h2 className="h2">Statistics</h2>
@@ -5195,9 +5222,10 @@ export default function GolfPoolPro() {
                 </div>
               </div>
             )}
-          </div>
+          </div></ErrorBoundary>
         )}
       </div>
     </>
+    </ErrorBoundary>
   );
 }
