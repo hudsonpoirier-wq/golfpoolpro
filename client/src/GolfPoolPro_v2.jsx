@@ -2733,7 +2733,7 @@ export default function GolfPoolPro() {
             </div>
             <div className="page">
               <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",marginBottom:24}}>
-                <button className="btn btn-prim" onClick={()=>setView("admin")}>+ New Pool</button>
+                <button className="btn btn-prim" onClick={()=>setView("create-pool")}>+ New Pool</button>
               </div>
 	              <div className="g3" style={{marginBottom:40}}>
 	                {pools.map(pool=>{
@@ -2790,7 +2790,7 @@ export default function GolfPoolPro() {
                 })}
                 {/* New pool card */}
                 <div className="pool-card" style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12,minHeight:260,border:"2px dashed var(--parchment)",background:"transparent",boxShadow:"none"}}
-                  onClick={()=>setView("admin")}>
+                  onClick={()=>setView("create-pool")}>
                   <div style={{width:48,height:48,borderRadius:"50%",background:"var(--cream-2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>+</div>
                   <p style={{fontWeight:600,color:"var(--muted)"}}>Create New Pool</p>
                 </div>
@@ -4580,8 +4580,8 @@ export default function GolfPoolPro() {
           </div>
         )}
 
-        {/* ──────── ADMIN (Create/Edit Pool) ──────── */}
-        {view==="admin" && (
+        {/* ──────── CREATE POOL ──────── */}
+        {view==="create-pool" && (
           <div className="page">
             <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:22}}>
               <button className="btn btn-ghost btn-sm" onClick={()=>setView("home")}>← Home</button>
