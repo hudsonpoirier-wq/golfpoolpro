@@ -2441,7 +2441,6 @@ export default function GolfPoolPro() {
 
         {/* ──────── POOL VIEW (Lobby → Draft → Live) ──────── */}
         {view==="pool" && activePool && (
-          <ErrorBoundary>
           <div>
             {/* Pool header bar */}
 	            <div style={{background:"var(--forest)",padding:"16px 28px",display:"flex",alignItems:"center",gap:16}}>
@@ -4689,12 +4688,10 @@ export default function GolfPoolPro() {
 
             </div>
           </div>
-          </ErrorBoundary>
         )}
 
         {/* ──────── ANALYTICS (Global / standalone view) ──────── */}
         {view==="analytics" && (
-          <ErrorBoundary>
           <div className="page">
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:10}}>
               <div>
@@ -4853,12 +4850,10 @@ export default function GolfPoolPro() {
               );
             })()}
           </div>
-          </ErrorBoundary>
         )}
 
         {/* ──────── STATISTICS ──────── */}
         {view==="stats" && (
-          <ErrorBoundary>
           <div className="page">
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:10}}>
               <div>
@@ -5228,7 +5223,6 @@ export default function GolfPoolPro() {
               </div>
             )}
           </div>
-          </ErrorBoundary>
         )}
       </div>
     </>
