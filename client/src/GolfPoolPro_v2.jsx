@@ -1078,6 +1078,7 @@ export default function GolfPoolPro() {
 	          R3: s.r3 ?? null,
 	          R4: s.r4 ?? null,
 	          pos: s.position ?? null,
+	          tee_time: s.tee_time || null,
 	          birdies: s.birdies || [0,0,0,0],
 	          eagles: s.eagles || [0,0,0,0],
 	          bogeys: s.bogeys || [0,0,0,0],
@@ -1404,7 +1405,7 @@ export default function GolfPoolPro() {
       } catch {}
     };
     poll();
-    const t = setInterval(poll, 4000);
+    const t = setInterval(poll, 2000);
     return () => {
       stopped = true;
       clearInterval(t);
@@ -1568,10 +1569,23 @@ export default function GolfPoolPro() {
     if (pickBusyRef.current) return;
     pickBusyRef.current = true;
     setPickBusy(true);
+    const safetyTimeout = setTimeout(() => {
+      pickBusyRef.current = false;
+      setPickBusy(false);
+    }, 15000);
     try {
       if (isShared) {
         if (mode === "force") await Draft.forcePick(activePool.id, golferId);
         else await Draft.pick(activePool.id, golferId);
+
+        // Optimistic UI update - show pick immediately
+        const pId = currentParticipant?.id;
+        if (pId) {
+          const optimisticPick = { golferId, participantId: pId, pickNum: currentPick };
+          setDrafted(d => [...d, optimisticPick]);
+          setCurrentPick(cp => cp + 1);
+          setTimer(activePool?.shotClock || 60);
+        }
 
         const state = await Draft.state(activePool.id);
         const picks = state?.picks || [];
@@ -1586,6 +1600,8 @@ export default function GolfPoolPro() {
         if (state?.isDone || picks.length >= totalPicks) {
           setDraftDone(true);
           setDraftActive(false);
+          // Auto-transition to live view immediately
+          setTimeout(() => { setPoolPhase("live"); }, 1500);
         }
         return;
       }
@@ -1605,8 +1621,22 @@ export default function GolfPoolPro() {
       const sc = activePool?.shotClock||config.shotClock;
       setTimer(sc);
     } catch (e) {
-      notify(e?.message || "Pick failed. Refresh and try again.", "error");
+      const msg = e?.message || "Pick failed.";
+      if (msg.includes("conflict") || msg.includes("409") || msg.includes("simultaneously")) {
+        // Auto-refresh state on conflict
+        try {
+          const state = await Draft.state(activePool.id);
+          const picks = state?.picks || [];
+          const mapped = picks.map(p => ({ golferId: p.golfer_id, participantId: p.user_id, pickNum: p.pick_number }));
+          setDrafted(mapped);
+          setCurrentPick(picks.length);
+          notify("Pick conflict — state refreshed. Try again.", "error");
+        } catch { notify(msg, "error"); }
+      } else {
+        notify(msg + " Refresh and try again.", "error");
+      }
     } finally {
+      clearTimeout(safetyTimeout);
       pickBusyRef.current = false;
       setPickBusy(false);
     }
@@ -2978,15 +3008,16 @@ export default function GolfPoolPro() {
                               className={`pick-row ${canClick ? "" : "disabled"}`}
                               onClick={()=>canClick && makePick(g.id)}
                               title={!canClick ? (pickBusy ? "Pick in progress..." : (draftPaused ? "Draft is paused." : (isMyTurn ? "Waiting..." : "Not your turn."))) : "Draft this player"}
+                              style={{pointerEvents: pickBusy ? "none" : "auto", opacity: pickBusy ? 0.5 : 1, transition: "opacity 0.2s"}}
                             >
                               <div style={{width:26,height:26,borderRadius:7,background:"var(--forest)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0}}>
                                 {g.rank}
                               </div>
                               <div style={{flex:1}}>
                                 <p style={{fontSize:13,fontWeight:600,lineHeight:1.2}}>{g.country} {g.name}</p>
-                                <p style={{fontSize:11,color:"var(--muted)"}}>Avg {g.avg} · SG {g.sg>0?"+":""}{g.sg}</p>
+                                <p style={{fontSize:11,color:"var(--muted)"}}>#{g.rank} World{g.sg?` · SG ${g.sg>0?"+":""}${g.sg}`:""}</p>
                               </div>
-                              <p style={{fontSize:12,fontWeight:700,color:"var(--forest)",flexShrink:0}}>{g.drivDist} yds</p>
+                              {g.sg?<p style={{fontSize:12,fontWeight:700,color:g.sg>0?"var(--forest)":"var(--muted)",flexShrink:0}}>SG {g.sg>0?"+":""}{g.sg}</p>:null}
                             </div>
                           ));
                         })()}
@@ -3179,7 +3210,7 @@ export default function GolfPoolPro() {
 	                  {poolStandings.slice(0,4).map((p,i)=>{
 	                    const teamScores = p.team.map(g=>{
 	                      const ls=liveScores.find(l=>l.gId===g.id);
-	                      return {g, tot: sumRounds(ls)};
+	                      return {g, tot: sumRounds(ls), ls};
 	                    }).sort((a,b)=>(a.tot??999)-(b.tot??999));
 	                    return (
                       <div key={p.id} className="card" style={{padding:18,border:i===0?"2px solid var(--gold)":"1px solid rgba(27,67,50,.06)"}}>
@@ -3193,11 +3224,12 @@ export default function GolfPoolPro() {
                           <span style={{fontSize:11,color:"var(--muted)"}}>best {sc}</span>
                         </div>
                         {/* Show each golfer with their live score */}
-                        {teamScores.map(({g,tot},gi)=>(
+                        {teamScores.map(({g,tot,ls},gi)=>(
                           <div key={g.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"3px 0",opacity:gi<sc?1:0.45}}>
                             <span style={{fontSize:11,color:"var(--muted)",maxWidth:90,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                               {gi<sc&&<span style={{color:"var(--gold)",marginRight:4}}>★</span>}
                               {g.name.split(" ").pop()}
+                              {ls?.tee_time && <span style={{color:"var(--gold)",marginLeft:4,fontWeight:600}}>{ls.tee_time}</span>}
                             </span>
                             <span style={{fontSize:12,fontWeight:gi<sc?700:400}}>{fmtScore(tot)}</span>
                           </div>
@@ -3232,7 +3264,7 @@ export default function GolfPoolPro() {
                             <div style={{width:26,height:26,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,background:pos===1?"var(--gold-pale)":pos===2?"#E2E8F0":pos===3?"#FEE2CC":isInPool?"rgba(27,67,50,.08)":"var(--cream-2)",color:pos<=3?["#7A5C00","#475569","#9A3412"][pos-1]:isInPool?"var(--forest)":"var(--muted)"}}>{pos}</div>
                             <div>
                               <p style={{fontWeight:isInPool?700:600,fontSize:14}}>{g.country} {g.name}{isInPool&&<span style={{marginLeft:6,fontSize:10,background:"var(--gold-pale)",color:"#7A5C00",padding:"1px 5px",borderRadius:3,fontWeight:700}}>IN POOL</span>}</p>
-                              <p style={{fontSize:11,color:"var(--muted)"}}>#{g.rank} · {g.drivDist} yds</p>
+                              <p style={{fontSize:11,color:"var(--muted)"}}>#{g.rank}{g.sg?` · SG ${g.sg>0?"+":""}${g.sg}`:""}{s.tee_time ? ` · Tee: ${s.tee_time}` : ""}</p>
                             </div>
                             {[s.R1,s.R2,s.R3,s.R4].map((v,i)=><div key={i} style={{textAlign:"right"}}>{fmtScore(v)}</div>)}
 	                            <div style={{textAlign:"right",fontSize:15}}>{fmtScore(s.tot)}</div>
@@ -3493,6 +3525,7 @@ export default function GolfPoolPro() {
                                           <div style={{flex:1}}>
                                             <p style={{fontWeight:700,fontSize:14}}>{g.country} {g.name}</p>
                                             <p style={{fontSize:11,color:"var(--muted)"}}>T{tourneyPos} in tournament · #{g.rank} world</p>
+                                            {ls?.tee_time && <span style={{fontSize:11,color:"var(--gold)",fontWeight:600}}>Tee: {ls.tee_time}</span>}
                                           </div>
                                           <div style={{textAlign:"right"}}>
                                             {fmtScore(tot)}
@@ -3907,7 +3940,7 @@ export default function GolfPoolPro() {
                               <div style={{width:26,height:26,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,background:idx===0?"var(--gold-pale)":idx===1?"#E2E8F0":idx===2?"#FEE2CC":isInPool?"rgba(27,67,50,.08)":"var(--cream-2)",color:idx<3?["#7A5C00","#475569","#9A3412"][idx]:isInPool?"var(--forest)":"var(--muted)"}}>{idx+1}</div>
                               <div>
                                 <p style={{fontWeight:isInPool?700:600,fontSize:14}}>{g.country} {g.name}{isInPool&&<span style={{marginLeft:6,fontSize:10,background:"var(--gold-pale)",color:"#7A5C00",padding:"1px 5px",borderRadius:3,fontWeight:700}}>★ {drafter?.name?.split(" ")[0]||"Pool"}</span>}</p>
-                                <p style={{fontSize:11,color:"var(--muted)"}}>#{g.rank} · {g.drivDist} yds · SG {g.sg>0?"+":""}{g.sg}</p>
+                                <p style={{fontSize:11,color:"var(--muted)"}}>#{g.rank}{g.sg?` · SG ${g.sg>0?"+":""}${g.sg}`:""}{ls?.tee_time ? ` · Tee: ${ls.tee_time}` : ""}</p>
                               </div>
 	                              {ls
 	                                ? [ls.R1,ls.R2,ls.R3,ls.R4].map((v,i)=><div key={i} style={{textAlign:"right"}}>{fmtScore(v)}</div>)
@@ -3977,7 +4010,7 @@ export default function GolfPoolPro() {
                                     </p>
                                   </div>
                                   <div style={{display:"flex",gap:14}}>
-                                    {[["Total",fmtScore(tot)],["Drive",`${poolStatsPlayer.drivDist} yds`],["GIR",`${poolStatsPlayer.gir}%`]].map(([l,v])=>(
+                                    {[["Total",fmtScore(tot)],["Rank",`#${poolStatsPlayer.rank}`],["SG",poolStatsPlayer.sg?`${poolStatsPlayer.sg>0?"+":""}${poolStatsPlayer.sg}`:"—"]].map(([l,v])=>(
                                       <div key={l} className="stat-pill">
                                         <div className="stat-pill-n">{v}</div>
                                         <div className="stat-pill-l">{l}</div>
@@ -4745,7 +4778,7 @@ export default function GolfPoolPro() {
                       <div style={{width:26,height:26,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,background:s.pos===1?"var(--gold-pale)":s.pos===2?"#E2E8F0":s.pos===3?"#FEE2CC":"var(--cream-2)",color:s.pos<=3?["#7A5C00","#475569","#9A3412"][s.pos-1]:"var(--muted)"}}>{s.pos}</div>
                       <div>
                         <p style={{fontWeight:600,fontSize:14}}>{g.country} {g.name}</p>
-                        <p style={{fontSize:11,color:"var(--muted)"}}>#{g.rank} · {g.drivDist} yds</p>
+                        <p style={{fontSize:11,color:"var(--muted)"}}>#{g.rank}{g.sg?` · SG ${g.sg>0?"+":""}${g.sg}`:""}</p>
                       </div>
                       {[s.R1,s.R2,s.R3,s.R4].map((v,i)=><div key={i} style={{textAlign:"right"}}>{fmtScore(v)}</div>)}
                       <div style={{textAlign:"right",fontSize:15}}>{fmtScore(tot)}</div>
@@ -5074,7 +5107,7 @@ export default function GolfPoolPro() {
                       <div style={{width:26,height:26,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,background:"var(--cream-2)",color:"var(--muted)"}}>{g.rank}</div>
                       <div>
                         <p style={{fontWeight:600,fontSize:14}}>{g.country} {g.name}</p>
-                        <p style={{fontSize:11,color:"var(--muted)"}}>{g.drivDist} yds · {g.drivAcc}% acc</p>
+                        <p style={{fontSize:11,color:"var(--muted)"}}>#{g.rank}{g.sg?` · SG ${g.sg>0?"+":""}${g.sg}`:""}</p>
                       </div>
                       <div style={{textAlign:"right",fontSize:13,fontWeight:600}}>{g.avg}</div>
                       <div style={{textAlign:"right",fontSize:13}}>{g.drivDist}</div>
@@ -5117,7 +5150,7 @@ export default function GolfPoolPro() {
                             <p className="sub">World Rank #{statsPlayer.rank} · Avg {statsPlayer.avg} · SG {statsPlayer.sg>0?"+":""}{statsPlayer.sg}</p>
                           </div>
                           <div style={{display:"flex",gap:14}}>
-                            {[["Total",fmtScore(tot)],["Drive",`${statsPlayer.drivDist} yds`],["GIR",`${statsPlayer.gir}%`]].map(([l,v])=>(
+                            {[["Total",fmtScore(tot)],["Rank",`#${statsPlayer.rank}`],["SG",statsPlayer.sg?`${statsPlayer.sg>0?"+":""}${statsPlayer.sg}`:"—"]].map(([l,v])=>(
                               <div key={l} className="stat-pill">
                                 <div className="stat-pill-n">{v}</div>
                                 <div className="stat-pill-l">{l}</div>

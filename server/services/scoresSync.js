@@ -150,6 +150,7 @@ async function syncLiveScores(supabase) {
         r2: s.r2 ?? null,
         r3: s.r3 ?? null,
         r4: s.r4 ?? null,
+        tee_time: s.tee_time || null,
         birdies: s.birdies || [0,0,0,0],
         eagles: s.eagles || [0,0,0,0],
         bogeys: s.bogeys || [0,0,0,0],
@@ -560,6 +561,9 @@ function normalizeDataGolfScoreRow(raw, coursePar) {
     }
   }
 
+  // Tee time — DataGolf may provide it under various field names
+  const tee_time = raw.tee_time || raw.teetime || raw.start_time || raw.tee_off || null;
+
   return {
     golferId,
     playerName,
@@ -571,6 +575,7 @@ function normalizeDataGolfScoreRow(raw, coursePar) {
     r4,
     status,
     thru,
+    tee_time,
     birdies: [0, 0, 0, 0],
     eagles: [0, 0, 0, 0],
     bogeys: [0, 0, 0, 0],

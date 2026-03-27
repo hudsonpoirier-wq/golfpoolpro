@@ -78,6 +78,7 @@ create table public.tournament_scores (
   birdies         int[] default '{0,0,0,0}',
   eagles          int[] default '{0,0,0,0}',
   bogeys          int[] default '{0,0,0,0}',
+  tee_time        text,
   updated_at      timestamptz default now(),
   unique (tournament_id, golfer_id)
 );
