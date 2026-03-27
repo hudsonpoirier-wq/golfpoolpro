@@ -680,9 +680,36 @@ async function fetchDataGolfLiveScores(internalTournamentId, supabase) {
       if (!eventName || (!eventName.includes(tournamentName) && !tournamentName.includes(eventName))) {
         continue;
       }
-      // Extract course par from the API response
-      const coursePar = Number(json.course_par ?? json.info?.course_par ?? json.par ?? 72) || 72;
+      // Extract course par from the API response, or auto-detect from player data
+      let coursePar = Number(json.course_par ?? json.info?.course_par ?? json.par ?? 0) || 0;
       const players = extractDataGolfPlayerArray(json);
+
+      // Auto-detect par if not provided: for players in round 2+ with completed R1,
+      // par = R1_strokes - (current_score - today)
+      if (!coursePar && players.length) {
+        const parGuesses = [];
+        for (const p of players) {
+          const r1Raw = Number(p.R1 ?? p.r1 ?? NaN);
+          const curScore = Number(p.current_score ?? p.total_to_par ?? NaN);
+          const todayScore = Number(p.today ?? NaN);
+          const round = Number(p.round ?? p.current_round ?? 0);
+          if (round >= 2 && r1Raw > 50 && Number.isFinite(curScore) && Number.isFinite(todayScore)) {
+            // R1 to-par = cumulative - today's round score
+            const r1ToPar = curScore - todayScore;
+            const detectedPar = r1Raw - r1ToPar;
+            if (detectedPar >= 68 && detectedPar <= 74) parGuesses.push(detectedPar);
+          }
+        }
+        if (parGuesses.length >= 3) {
+          // Use the mode (most common value)
+          const freq = {};
+          for (const g of parGuesses) freq[g] = (freq[g] || 0) + 1;
+          coursePar = Number(Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0]);
+          console.log(`DataGolf: auto-detected course par = ${coursePar} from ${parGuesses.length} players`);
+        }
+      }
+      if (!coursePar) coursePar = 72; // ultimate fallback
+
       const rows = players.map(p => normalizeDataGolfScoreRow(p, coursePar)).filter(Boolean);
       if (rows.length) {
         // Cache this tour mapping
