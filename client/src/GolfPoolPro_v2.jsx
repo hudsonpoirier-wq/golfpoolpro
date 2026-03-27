@@ -2441,7 +2441,8 @@ export default function GolfPoolPro() {
 
         {/* ──────── POOL VIEW (Lobby → Draft → Live) ──────── */}
         {view==="pool" && activePool && (
-          <ErrorBoundary><div>
+          <ErrorBoundary>
+          <div>
             {/* Pool header bar */}
 	            <div style={{background:"var(--forest)",padding:"16px 28px",display:"flex",alignItems:"center",gap:16}}>
 	              <button className="btn btn-sm" style={{background:"rgba(255,255,255,.1)",color:"#fff",border:"1px solid rgba(255,255,255,.2)"}} onClick={()=>{setView("home");setActivePool(null);setConfirmDelete(false);}}>← Back</button>
@@ -4687,12 +4688,14 @@ export default function GolfPoolPro() {
               )}
 
             </div>
-          </div></ErrorBoundary>
+          </div>
+          </ErrorBoundary>
         )}
 
         {/* ──────── ANALYTICS (Global / standalone view) ──────── */}
         {view==="analytics" && (
-          <ErrorBoundary><div className="page">
+          <ErrorBoundary>
+          <div className="page">
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:10}}>
               <div>
                 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4}}>
@@ -4849,12 +4852,14 @@ export default function GolfPoolPro() {
               </div>
               );
             })()}
-          </div></ErrorBoundary>
+          </div>
+          </ErrorBoundary>
         )}
 
         {/* ──────── STATISTICS ──────── */}
         {view==="stats" && (
-          <ErrorBoundary><div className="page">
+          <ErrorBoundary>
+          <div className="page">
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:10}}>
               <div>
                 <h2 className="h2">Statistics</h2>
@@ -5222,7 +5227,8 @@ export default function GolfPoolPro() {
                 </div>
               </div>
             )}
-          </div></ErrorBoundary>
+          </div>
+          </ErrorBoundary>
         )}
       </div>
     </>
