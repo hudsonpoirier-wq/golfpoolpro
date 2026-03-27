@@ -545,14 +545,29 @@ function normalizeDataGolfScoreRow(raw, coursePar) {
     if (r4 == null) r4 = rv("4") ?? rv(4);
   }
 
-  // If we still have no round scores, use current_score/today as the live score
-  // for the current round. This handles mid-round scoring.
-  if (r1 == null && r2 == null && r3 == null && r4 == null && Number.isFinite(currentScore)) {
-    // Place the cumulative to-par score in the current round slot
-    if (curRound === 1) r1 = currentScore;
-    else if (curRound === 2) r2 = currentScore;
-    else if (curRound === 3) r3 = currentScore;
-    else r4 = currentScore;
+  // Fill in the current round's live score when DataGolf hasn't finalized it yet.
+  // DataGolf sets R1/R2/etc to null while a round is in progress but provides
+  // "today" (current round to-par) and "current_score" (cumulative to-par).
+  if (curRound >= 1 && curRound <= 4) {
+    const roundSlots = [r1, r2, r3, r4];
+    const curIdx = curRound - 1;
+    if (roundSlots[curIdx] == null) {
+      // Prefer "today" (current round's to-par) over deriving from cumulative
+      let liveRoundScore = null;
+      if (Number.isFinite(todayScore)) {
+        liveRoundScore = todayScore;
+      } else if (Number.isFinite(currentScore)) {
+        // Derive today's score: cumulative minus sum of completed prior rounds
+        const priorSum = roundSlots.slice(0, curIdx).reduce((s, v) => s + (Number.isFinite(v) ? v : 0), 0);
+        liveRoundScore = currentScore - priorSum;
+      }
+      if (liveRoundScore != null) {
+        if (curRound === 1) r1 = liveRoundScore;
+        else if (curRound === 2) r2 = liveRoundScore;
+        else if (curRound === 3) r3 = liveRoundScore;
+        else r4 = liveRoundScore;
+      }
+    }
   }
 
   // Status mapping: active / cut / wd

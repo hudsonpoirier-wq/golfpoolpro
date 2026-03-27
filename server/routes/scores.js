@@ -8,7 +8,7 @@ router.get("/:tournamentId", async (req, res, next) => {
     const { data, error } = await sb
       .from("tournament_scores")
       .select(`
-        position, r1, r2, r3, r4, birdies, eagles, bogeys, updated_at,
+        position, r1, r2, r3, r4, birdies, eagles, bogeys, tee_time, updated_at,
         golfer:golfers(id, name, country, world_rank, driv_dist, driv_acc, gir, putts, scoring_avg, sg_total)
       `)
       .eq("tournament_id", req.params.tournamentId)
