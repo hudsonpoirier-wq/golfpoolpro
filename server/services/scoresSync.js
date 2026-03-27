@@ -157,9 +157,18 @@ async function syncLiveScores(supabase) {
         updated_at: new Date().toISOString(),
       }));
 
-      const { error } = await supabase
+      let { error } = await supabase
         .from("tournament_scores")
         .upsert(rows, { onConflict: "tournament_id,golfer_id" });
+
+      // Retry without tee_time if column doesn't exist
+      if (error && String(error.message || "").includes("tee_time")) {
+        const rowsNoTee = rows.map(({ tee_time, ...rest }) => rest);
+        const retry = await supabase
+          .from("tournament_scores")
+          .upsert(rowsNoTee, { onConflict: "tournament_id,golfer_id" });
+        error = retry.error;
+      }
 
       if (error) console.error(`Score upsert error [${tournament.name}]:`, error.message);
       else {
