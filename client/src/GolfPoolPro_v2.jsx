@@ -1439,9 +1439,11 @@ export default function GolfPoolPro() {
   };
   const hasTournamentStarted = (id) => {
     const t = getTournamentById(id);
-    const start = parseIsoDate(t?.start_date);
-    if (!start) return false;
-    return Date.now() >= start.getTime();
+    if (!t?.start_date) return false;
+    // Compare as local calendar dates (YYYY-MM-DD) so timezone doesn't push start to tomorrow
+    const today = new Date().toISOString().slice(0, 10);
+    const startDate = String(t.start_date).slice(0, 10);
+    return today >= startDate;
   };
   const getTournamentFieldSize = (id) => {
     const t = getTournamentById(id);
