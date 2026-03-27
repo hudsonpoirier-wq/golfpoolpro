@@ -612,6 +612,62 @@ const sumRounds = (ls) => {
   return rounds.reduce((sum, v) => sum + (typeof v === "number" ? v : 0), 0);
 };
 
+/**
+ * Calculate win probability for pool participants after each round.
+ * Uses softmax on score gaps with confidence scaling by rounds played.
+ * Returns [{r:"Start",...},{r:"R1",...},...] with participant first-name keys → probability %.
+ */
+const calcWinProb = (participants, getTeamFn, liveScoresList, scoringCount) => {
+  const roundKeys = ["R1","R2","R3","R4"];
+  const names = participants.map(p => p.name.split(" ")[0]);
+
+  // Determine how many rounds have actual data
+  const maxRound = roundKeys.reduce((mx, rk) => {
+    const hasData = liveScoresList.some(s => typeof s[rk] === "number");
+    return hasData ? roundKeys.indexOf(rk) + 1 : mx;
+  }, 0);
+
+  // Start: equal probability
+  const equalPct = Math.round(100 / Math.max(participants.length, 1));
+  const rows = [{ r: "Start", ...Object.fromEntries(names.map(n => [n, equalPct])) }];
+
+  // For each round played so far, compute cumulative scores and softmax probability
+  for (let ri = 0; ri < 4; ri++) {
+    if (ri >= maxRound) break;
+    // Confidence grows each round: alpha controls how much score gap matters
+    const alpha = 0.15 + ri * 0.12; // R1=0.15, R2=0.27, R3=0.39, R4=0.51
+
+    const cumScores = participants.map((p, pi) => {
+      const team = getTeamFn(p.id);
+      const golferCumScores = team.map(g => {
+        const ls = liveScoresList.find(l => l.gId === g.id);
+        if (!ls) return null;
+        const rds = roundKeys.slice(0, ri + 1).map(rk => ls[rk]).filter(v => typeof v === "number");
+        return rds.length > 0 ? rds.reduce((a, b) => a + b, 0) : null;
+      }).filter(v => v !== null).sort((a, b) => a - b);
+
+      const best = golferCumScores.slice(0, scoringCount);
+      return best.length > 0 ? best.reduce((a, b) => a + b, 0) : null;
+    });
+
+    const validScores = cumScores.filter(v => v !== null);
+    if (validScores.length === 0) break;
+
+    const minScore = Math.min(...validScores);
+    // Softmax: lower score = higher probability (golf: lower is better)
+    const exps = cumScores.map(s => s !== null ? Math.exp(-alpha * (s - minScore)) : 0.001);
+    const total = exps.reduce((a, b) => a + b, 0);
+    const probs = exps.map(e => Math.round((e / total) * 100));
+    // Adjust so they sum to 100
+    const probSum = probs.reduce((a, b) => a + b, 0);
+    if (probSum > 0 && probSum !== 100) probs[0] += 100 - probSum;
+
+    rows.push({ r: roundKeys[ri], ...Object.fromEntries(names.map((n, i) => [n, probs[i]])) });
+  }
+
+  return { data: rows, names };
+};
+
 const Avatar = ({init,size=32,color="#1B4332"}) => (
   <div style={{width:size,height:size,borderRadius:"50%",background:color,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:size*.35,fontWeight:700,flexShrink:0,letterSpacing:"0.5px"}}>
     {init}
@@ -3215,57 +3271,59 @@ export default function GolfPoolPro() {
                   </div>
                 )}
 
-                {poolTab==="chart" && (
+                {poolTab==="chart" && (()=>{
+                  // Determine which rounds have actual data
+                  const roundKeys=["R1","R2","R3","R4"];
+                  const playedRounds=roundKeys.filter(rk=>liveScores.some(s=>typeof s[rk]==="number"));
+                  const chartData=playedRounds.map((r,ri)=>({
+                    round:r,
+                    ...poolStandings.map(p=>({
+                      [p.name.split(" ")[0]]:p.team.map(g=>{
+                        const ls=liveScores.find(l=>l.gId===g.id);
+                        if(!ls) return 0;
+                        return playedRounds.slice(0,ri+1).map(rk=>ls[rk]).filter(v=>typeof v==='number').reduce((a,b)=>a+b,0);
+                      }).sort((a,b)=>a-b).slice(0,sc).reduce((a,b)=>a+b,0)
+                    })).reduce((a,b)=>({...a,...b}),{})
+                  }));
+                  return (
                   <div className="card">
                     <h3 className="h3" style={{marginBottom:4}}>Pool Standings — Round by Round</h3>
                     <p className="sub" style={{marginBottom:18}}>Cumulative best-{sc} score progression (lower = better)</p>
                     <ResponsiveContainer width="100%" height={300}>
-                      <LineChart margin={{top:5,right:10,bottom:0,left:0}}
-                        data={["R1","R2","R3","R4"].map((r,ri)=>({
-                          round:r,
-                          ...poolStandings.map(p=>({
-                            [p.name.split(" ")[0]]:p.team.map(g=>{
-                              const ls=liveScores.find(l=>l.gId===g.id);
-                              if(!ls) return 0;
-                              return [ls.R1,ls.R2,ls.R3,ls.R4].slice(0,ri+1).filter(v=>typeof v==='number').reduce((a,b)=>a+b,0);
-                            }).sort((a,b)=>a-b).slice(0,sc).reduce((a,b)=>a+b,0)
-                          })).reduce((a,b)=>({...a,...b}),{})
-                        }))}>
+                      <LineChart margin={{top:5,right:10,bottom:0,left:0}} data={chartData}>
                         <CartesianGrid stroke="var(--cream-2)" strokeDasharray="3 3"/>
                         <XAxis dataKey="round" tick={{fontSize:11,fill:"#78716C"}} axisLine={false} tickLine={false}/>
                         <YAxis tick={{fontSize:11,fill:"#78716C"}} axisLine={false} tickLine={false} tickFormatter={v=>v>0?`+${v}`:v}/>
                         <Tooltip content={<CTooltip/>}/>
                         {poolStandings.map((p,i)=>(
-                          <Line key={p.id} type="monotone" dataKey={p.name.split(" ")[0]} stroke={["#1B4332","#C8A94F","#40916C","#7E9B84","#B08968","#6B9BC0"][i]} strokeWidth={2.5} dot={{r:4}} name={p.name.split(" ")[0]}/>
+                          <Line key={p.id} type="monotone" dataKey={p.name.split(" ")[0]} stroke={["#1B4332","#C8A94F","#40916C","#7E9B84","#B08968","#6B9BC0"][i]} strokeWidth={2.5} dot={{r:4}} name={p.name.split(" ")[0]} connectNulls={false}/>
                         ))}
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
-                )}
+                  );
+                })()}
 
-                {poolTab==="prob" && (
+                {poolTab==="prob" && (()=>{
+                  const wp=calcWinProb(poolStandings,getPoolTeam,liveScores,sc);
+                  return (
                   <div className="card">
                     <h3 className="h3" style={{marginBottom:4}}>Win Probability</h3>
-                    <p className="sub" style={{marginBottom:18}}>Simulated win % after each round based on team scores</p>
+                    <p className="sub" style={{marginBottom:18}}>Win % after each round based on actual team scores (softmax model)</p>
                     <ResponsiveContainer width="100%" height={280}>
-                      <AreaChart data={[
-                        {r:"Start",...Object.fromEntries(poolStandings.map((p,i)=>[p.name.split(" ")[0],Math.max(5,25-i*3)]))},
-                        {r:"R1",   ...Object.fromEntries(poolStandings.map((p,i)=>[p.name.split(" ")[0],Math.max(3,28-i*4)]))},
-                        {r:"R2",   ...Object.fromEntries(poolStandings.map((p,i)=>[p.name.split(" ")[0],Math.max(2,32-i*5)]))},
-                        {r:"R3",   ...Object.fromEntries(poolStandings.map((p,i)=>[p.name.split(" ")[0],Math.max(1,36-i*6)]))},
-                        {r:"R4",   ...Object.fromEntries(poolStandings.map((p,i)=>[p.name.split(" ")[0],Math.max(0,i===0?55:i===1?25:i===2?12:5)]))},
-                      ]}>
+                      <AreaChart data={wp.data}>
                         <CartesianGrid stroke="var(--cream-2)" strokeDasharray="3 3"/>
                         <XAxis dataKey="r" tick={{fontSize:11,fill:"#78716C"}} axisLine={false} tickLine={false}/>
-                        <YAxis tick={{fontSize:11,fill:"#78716C"}} axisLine={false} tickLine={false} unit="%"/>
+                        <YAxis tick={{fontSize:11,fill:"#78716C"}} axisLine={false} tickLine={false} unit="%" domain={[0,100]}/>
                         <Tooltip content={<CTooltip/>}/>
-                        {poolStandings.map((p,i)=>(
-                          <Area key={p.id} type="monotone" dataKey={p.name.split(" ")[0]} stroke={["#1B4332","#C8A94F","#40916C","#7E9B84","#B08968","#6B9BC0"][i]} fill="none" strokeWidth={2} dot={{r:3}} name={p.name.split(" ")[0]}/>
+                        {wp.names.map((n,i)=>(
+                          <Area key={n} type="monotone" dataKey={n} stroke={["#1B4332","#C8A94F","#40916C","#7E9B84","#B08968","#6B9BC0"][i%6]} fill="none" strokeWidth={2} dot={{r:3}} name={n}/>
                         ))}
                       </AreaChart>
                     </ResponsiveContainer>
                   </div>
-                )}
+                  );
+                })()}
 
                 {/* ── POOL STATISTICS TAB ── */}
                 {poolTab==="stats" && (
@@ -3331,8 +3389,6 @@ export default function GolfPoolPro() {
                                 {[
                                   {n:fmtScore(bestGolferScore),l:"Best Golfer Score",sub:bestGolfer?.name.split(" ").pop()||"—"},
                                   {n:bestRound!==null?fmtScore(bestRound):"—",l:"Best Single Round",sub:"On your team"},
-                                  {n:myBirdies,l:"Team Birdies",sub:"All 4 rounds"},
-                                  {n:myEagles||myBogeys,l:myEagles?"Team Eagles":"Team Bogeys",sub:myEagles?"Across your team":"Total bogeys"},
                                 ].map(s=>(
                                   <div key={s.l} className="card stat-pill" style={{textAlign:"left",padding:"18px 20px"}}>
                                     <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:36,fontWeight:700,color:"var(--gold)",lineHeight:1}}>{s.n}</div>
@@ -3663,6 +3719,144 @@ export default function GolfPoolPro() {
                                   })()}
                                 </div>
                               </div>
+
+                              {/* Score Distribution Histogram */}
+                              {(()=>{
+                                const allTots=liveScores.map(s=>sumRounds(s)).filter(v=>v!==null);
+                                if(allTots.length<4) return null;
+                                const mn=Math.min(...allTots), mx=Math.max(...allTots);
+                                const bucketSize=Math.max(1,Math.ceil((mx-mn)/8));
+                                const buckets=[];
+                                for(let b=mn;b<=mx;b+=bucketSize){
+                                  const lo=b, hi=b+bucketSize;
+                                  const cnt=allTots.filter(v=>v>=lo&&v<hi).length;
+                                  const label=lo>=0?`+${lo}`:`${lo}`;
+                                  const hasTeam=myTeam.some(g=>{const s=liveScores.find(l=>l.gId===g.id);const t=sumRounds(s);return t!==null&&t>=lo&&t<hi;});
+                                  buckets.push({range:label,count:cnt,hasTeam});
+                                }
+                                return (
+                                  <div className="card" style={{marginTop:0}}>
+                                    <h3 className="h3" style={{marginBottom:4}}>Score Distribution</h3>
+                                    <p className="sub" style={{marginBottom:16}}>How scores are spread across the entire field</p>
+                                    <ResponsiveContainer width="100%" height={200}>
+                                      <BarChart data={buckets} margin={{top:0,right:10,bottom:0,left:0}}>
+                                        <CartesianGrid stroke="var(--cream-2)" vertical={false}/>
+                                        <XAxis dataKey="range" tick={{fontSize:10,fill:"#78716C"}} axisLine={false} tickLine={false}/>
+                                        <YAxis tick={{fontSize:10,fill:"#78716C"}} axisLine={false} tickLine={false} allowDecimals={false}/>
+                                        <Tooltip formatter={(v)=>[v,"Golfers"]}/>
+                                        <Bar dataKey="count" name="Golfers" radius={[3,3,0,0]}>
+                                          {buckets.map((b,i)=><Cell key={i} fill={b.hasTeam?"var(--gold)":"#2D6A4F"}/>)}
+                                        </Bar>
+                                      </BarChart>
+                                    </ResponsiveContainer>
+                                    <p style={{fontSize:10,color:"var(--muted)",marginTop:8,textAlign:"center"}}>Gold bars contain your team's golfers</p>
+                                  </div>
+                                );
+                              })()}
+
+                              {/* Top 10 Leaderboard Mini */}
+                              {(()=>{
+                                const sorted=[...liveScores].map(s=>{const g=findGolferById(s.gId);return g?{name:g.name.split(" ").pop(),tot:sumRounds(s),isTeam:myTeam.some(t=>t.id===s.gId)}:null;}).filter(s=>s&&s.tot!==null).sort((a,b)=>a.tot-b.tot).slice(0,10);
+                                if(sorted.length<3) return null;
+                                return (
+                                  <div className="card" style={{marginTop:0}}>
+                                    <h3 className="h3" style={{marginBottom:4}}>Top 10 Leaderboard</h3>
+                                    <p className="sub" style={{marginBottom:16}}>Current tournament leaders</p>
+                                    <ResponsiveContainer width="100%" height={Math.max(sorted.length*32,120)}>
+                                      <BarChart data={sorted} layout="vertical" margin={{top:0,right:20,bottom:0,left:60}}>
+                                        <CartesianGrid stroke="var(--cream-2)" horizontal={false}/>
+                                        <XAxis type="number" tick={{fontSize:10,fill:"#78716C"}} axisLine={false} tickLine={false} tickFormatter={v=>v>0?`+${v}`:String(v)}/>
+                                        <YAxis type="category" dataKey="name" tick={{fontSize:11,fill:"#78716C"}} axisLine={false} tickLine={false} width={55}/>
+                                        <Tooltip formatter={(v)=>[v>0?`+${v}`:String(v),"Score"]}/>
+                                        <ReferenceLine x={0} stroke="var(--parchment)" strokeWidth={1.5}/>
+                                        <Bar dataKey="tot" name="Score" maxBarSize={18}>
+                                          {sorted.map((s,i)=><Cell key={i} fill={s.isTeam?"var(--gold)":"#2D6A4F"}/>)}
+                                        </Bar>
+                                      </BarChart>
+                                    </ResponsiveContainer>
+                                    <p style={{fontSize:10,color:"var(--muted)",marginTop:8,textAlign:"center"}}>Gold = your team's golfers</p>
+                                  </div>
+                                );
+                              })()}
+
+                              {/* Team Consistency Meter */}
+                              {(()=>{
+                                const teamRoundData=myTeam.map(g=>{
+                                  const ls=liveScores.find(l=>l.gId===g.id);
+                                  if(!ls) return null;
+                                  const rds=[ls.R1,ls.R2,ls.R3,ls.R4].filter(v=>typeof v==="number");
+                                  if(rds.length<2) return null;
+                                  const avg=rds.reduce((a,b)=>a+b,0)/rds.length;
+                                  const variance=rds.reduce((s,v)=>s+Math.pow(v-avg,2),0)/rds.length;
+                                  const stdDev=Math.sqrt(variance);
+                                  return {name:g.name.split(" ").pop(),avg:Math.round(avg*10)/10,stdDev:Math.round(stdDev*10)/10,best:Math.min(...rds),worst:Math.max(...rds)};
+                                }).filter(Boolean);
+                                if(teamRoundData.length<1) return null;
+                                return (
+                                  <div className="card" style={{marginTop:0}}>
+                                    <h3 className="h3" style={{marginBottom:4}}>Team Consistency</h3>
+                                    <p className="sub" style={{marginBottom:16}}>Lower spread = more consistent scoring</p>
+                                    <ResponsiveContainer width="100%" height={220}>
+                                      <BarChart data={teamRoundData} margin={{top:10,right:10,bottom:0,left:0}}>
+                                        <CartesianGrid stroke="var(--cream-2)" vertical={false}/>
+                                        <XAxis dataKey="name" tick={{fontSize:10,fill:"#78716C"}} axisLine={false} tickLine={false}/>
+                                        <YAxis tick={{fontSize:10,fill:"#78716C"}} axisLine={false} tickLine={false}/>
+                                        <Tooltip content={<CTooltip/>}/>
+                                        <Bar dataKey="best" name="Best Round" fill="#40916C" radius={[3,3,0,0]}/>
+                                        <Bar dataKey="worst" name="Worst Round" fill="#EF4444" radius={[3,3,0,0]}/>
+                                        <Bar dataKey="avg" name="Average" fill="var(--gold)" radius={[3,3,0,0]}/>
+                                      </BarChart>
+                                    </ResponsiveContainer>
+                                  </div>
+                                );
+                              })()}
+
+                              {/* Cumulative Team Score Area Chart */}
+                              {(()=>{
+                                const roundLabels=["R1","R2","R3","R4"];
+                                const areaData=roundLabels.map((r,ri)=>{
+                                  let teamSum=0, fieldSum=0, fieldCount=0;
+                                  myTeam.forEach(g=>{
+                                    const ls=liveScores.find(l=>l.gId===g.id);
+                                    if(ls&&ls[r]!==null&&ls[r]!==undefined) teamSum+=ls[r];
+                                  });
+                                  liveScores.forEach(s=>{
+                                    if(s[r]!==null&&s[r]!==undefined){fieldSum+=s[r];fieldCount++;}
+                                  });
+                                  const fieldAvg=fieldCount?Math.round((fieldSum/fieldCount)*10)/10:0;
+                                  // Cumulative
+                                  const prevTeam=ri>0?areaData[ri-1]?.team||0:0;
+                                  const prevField=ri>0?areaData[ri-1]?.field||0:0;
+                                  return {round:r,team:prevTeam+teamSum,field:prevField+fieldAvg};
+                                });
+                                if(!areaData.some(d=>d.team!==0)) return null;
+                                return (
+                                  <div className="card" style={{marginTop:0}}>
+                                    <h3 className="h3" style={{marginBottom:4}}>Cumulative Score Trend</h3>
+                                    <p className="sub" style={{marginBottom:16}}>Your team's total vs field average over rounds</p>
+                                    <ResponsiveContainer width="100%" height={220}>
+                                      <AreaChart data={areaData} margin={{top:10,right:10,bottom:0,left:0}}>
+                                        <defs>
+                                          <linearGradient id="teamGrad" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#1B4332" stopOpacity={0.3}/>
+                                            <stop offset="95%" stopColor="#1B4332" stopOpacity={0}/>
+                                          </linearGradient>
+                                          <linearGradient id="fieldGrad" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#C8A94F" stopOpacity={0.3}/>
+                                            <stop offset="95%" stopColor="#C8A94F" stopOpacity={0}/>
+                                          </linearGradient>
+                                        </defs>
+                                        <CartesianGrid stroke="var(--cream-2)" strokeDasharray="3 3"/>
+                                        <XAxis dataKey="round" tick={{fontSize:11,fill:"#78716C"}} axisLine={false} tickLine={false}/>
+                                        <YAxis tick={{fontSize:10,fill:"#78716C"}} axisLine={false} tickLine={false} tickFormatter={v=>v>0?`+${v}`:String(v)}/>
+                                        <Tooltip content={<CTooltip/>}/>
+                                        <Area type="monotone" dataKey="team" name="Your Team" stroke="#1B4332" fill="url(#teamGrad)" strokeWidth={2.5}/>
+                                        <Area type="monotone" dataKey="field" name="Field Avg" stroke="#C8A94F" fill="url(#fieldGrad)" strokeWidth={2} strokeDasharray="5 5"/>
+                                      </AreaChart>
+                                    </ResponsiveContainer>
+                                  </div>
+                                );
+                              })()}
                             </div>
                           );
                         })()}
@@ -3793,21 +3987,6 @@ export default function GolfPoolPro() {
                                     </BarChart>
                                   </ResponsiveContainer>
                                 </div>
-                                {sg.length>0&&sg.some(d=>Math.abs(d.value)>0.01)&&(
-                                  <div className="card">
-                                    <h3 className="h3" style={{marginBottom:4}}>Strokes Gained</h3>
-                                    <p className="sub" style={{marginBottom:16}}>SG breakdown by category</p>
-                                    <ResponsiveContainer width="100%" height={200}>
-                                      <RadarChart data={sg} margin={{top:10,right:10,bottom:10,left:10}}>
-                                        <PolarGrid stroke="var(--parchment)"/>
-                                        <PolarAngleAxis dataKey="stat" tick={{fontSize:10,fill:"#78716C"}}/>
-                                        <PolarRadiusAxis angle={30} domain={[-0.5,2]} tick={{fontSize:8,fill:"#CBD5E1"}} tickCount={4}/>
-                                        <Radar dataKey="value" stroke="var(--forest)" fill="var(--forest)" fillOpacity={0.2} strokeWidth={2}/>
-                                        <Tooltip content={<CTooltip/>}/>
-                                      </RadarChart>
-                                    </ResponsiveContainer>
-                                  </div>
-                                )}
                               </div>
                             </div>
                           );
@@ -3897,14 +4076,8 @@ export default function GolfPoolPro() {
                             {l:"Total Score",a:totA!==null?fmtScore(totA):"—",b:totB!==null?fmtScore(totB):"—",win:totA!==null&&totB!==null?(totA<totB?"a":totA>totB?"b":"e"):null},
                             {l:"World Rank",a:`#${compareA.rank}`,b:`#${compareB.rank}`,win:compareA.rank<compareB.rank?"a":compareA.rank>compareB.rank?"b":"e"},
                             ...(compareA.avg||compareB.avg?[{l:"Scoring Avg",a:compareA.avg||"—",b:compareB.avg||"—",win:compareA.avg&&compareB.avg?(compareA.avg<compareB.avg?"a":compareA.avg>compareB.avg?"b":"e"):null}]:[]),
-                            ...(compareA.sg||compareB.sg?[{l:"SG Total",a:compareA.sg?(compareA.sg>0?`+${compareA.sg}`:compareA.sg):"—",b:compareB.sg?(compareB.sg>0?`+${compareB.sg}`:compareB.sg):"—",win:compareA.sg&&compareB.sg?(compareA.sg>compareB.sg?"a":compareA.sg<compareB.sg?"b":"e"):null}]:[]),
                             ...(compareA.drivDist||compareB.drivDist?[{l:"Drive Dist",a:compareA.drivDist?`${compareA.drivDist} yds`:"—",b:compareB.drivDist?`${compareB.drivDist} yds`:"—",win:compareA.drivDist&&compareB.drivDist?(compareA.drivDist>compareB.drivDist?"a":compareA.drivDist<compareB.drivDist?"b":"e"):null}]:[]),
                             ...(compareA.gir||compareB.gir?[{l:"GIR %",a:compareA.gir?`${compareA.gir}%`:"—",b:compareB.gir?`${compareB.gir}%`:"—",win:compareA.gir&&compareB.gir?(compareA.gir>compareB.gir?"a":compareA.gir<compareB.gir?"b":"e"):null}]:[]),
-                            ...(lsA&&lsB?[
-                              {l:"Birdies",a:lsA.birdies.reduce((x,y)=>x+y,0),b:lsB.birdies.reduce((x,y)=>x+y,0),win:lsA.birdies.reduce((x,y)=>x+y,0)>lsB.birdies.reduce((x,y)=>x+y,0)?"a":"b"},
-                              {l:"Eagles",a:lsA.eagles.reduce((x,y)=>x+y,0),b:lsB.eagles.reduce((x,y)=>x+y,0),win:lsA.eagles.reduce((x,y)=>x+y,0)>lsB.eagles.reduce((x,y)=>x+y,0)?"a":"b"},
-                              {l:"Bogeys",a:lsA.bogeys.reduce((x,y)=>x+y,0),b:lsB.bogeys.reduce((x,y)=>x+y,0),win:lsA.bogeys.reduce((x,y)=>x+y,0)<lsB.bogeys.reduce((x,y)=>x+y,0)?"a":"b"},
-                            ]:[]),
                           ];
                           return (
                             <div>
@@ -4560,32 +4733,38 @@ export default function GolfPoolPro() {
               </div>
             )}
 
-            {analyticsTab==="chart" && (
+            {analyticsTab==="chart" && (()=>{
+              const roundKeys=["R1","R2","R3","R4"];
+              const playedRnds=roundKeys.filter(rk=>liveScores.some(s=>typeof s[rk]==="number"));
+              if(playedRnds.length===0) return <div className="card"><p style={{color:"var(--muted)",textAlign:"center",padding:40}}>No round data yet</p></div>;
+              // Use top 6 players by score
+              const top6=[...liveScores].map(s=>({...s,tot:sumRounds(s)})).filter(s=>s.tot!==null).sort((a,b)=>a.tot-b.tot).slice(0,6);
+              const top6Names=top6.map(s=>{const g=findGolferById(s.gId);return g?g.name.split(" ").pop():"?";});
+              const chartData=playedRnds.map((r,ri)=>({
+                round:r,
+                ...top6.reduce((acc,s,si)=>{
+                  acc[top6Names[si]]=playedRnds.slice(0,ri+1).map(rk=>s[rk]).filter(v=>typeof v==="number").reduce((a,b)=>a+b,0);
+                  return acc;
+                },{})
+              }));
+              return (
               <div className="card">
                 <h3 className="h3" style={{marginBottom:4}}>Cumulative Score — All Rounds</h3>
                 <p className="sub" style={{marginBottom:18}}>Round-by-round total score progression (lower = better)</p>
                 <ResponsiveContainer width="100%" height={300}>
-                  <LineChart margin={{top:5,right:10,bottom:0,left:0}}
-                    data={["R1","R2","R3","R4"].map((r,ri)=>({
-                      round:r,
-                      ...liveScores.slice(0,6).reduce((acc,s)=>{
-	                        const g=findGolferById(s.gId);
-	                        if(!g) return acc;
-	                        acc[g.name.split(" ").pop()]=[s.R1,s.R2,s.R3,s.R4].slice(0,ri+1).reduce((a,b)=>a+(typeof b==="number"?b:0),0);
-	                        return acc;
-	                      },{})
-                    }))}>
+                  <LineChart margin={{top:5,right:10,bottom:0,left:0}} data={chartData}>
                     <CartesianGrid stroke="var(--cream-2)" strokeDasharray="3 3"/>
                     <XAxis dataKey="round" tick={{fontSize:11,fill:"#78716C"}} axisLine={false} tickLine={false}/>
                     <YAxis tick={{fontSize:11,fill:"#78716C"}} axisLine={false} tickLine={false} tickFormatter={v=>v>0?`+${v}`:v}/>
                     <Tooltip content={<CTooltip/>}/>
-                    {["Scheffler","McIlroy","Schauffele","Morikawa","Hovland","Rahm"].map((n,i)=>(
+                    {top6Names.map((n,i)=>(
                       <Line key={n} type="monotone" dataKey={n} stroke={["#1B4332","#C8A94F","#40916C","#7E9B84","#B08968","#6B9BC0"][i]} strokeWidth={2.5} dot={{r:4}} name={n}/>
                     ))}
                   </LineChart>
                 </ResponsiveContainer>
               </div>
-            )}
+              );
+            })()}
 
             {analyticsTab==="teams" && (
               <div className="g2">
@@ -4626,29 +4805,26 @@ export default function GolfPoolPro() {
               </div>
             )}
 
-            {analyticsTab==="prob" && (
+            {analyticsTab==="prob" && (()=>{
+              const wp=calcWinProb(standings,getTeam,liveScores,scoringGolfers);
+              return (
               <div className="card">
                 <h3 className="h3" style={{marginBottom:4}}>Win Probability Tracker</h3>
-                <p className="sub" style={{marginBottom:18}}>Simulated win % after each round based on scoring position</p>
+                <p className="sub" style={{marginBottom:18}}>Win % after each round based on actual team scores (softmax model)</p>
                 <ResponsiveContainer width="100%" height={280}>
-                  <AreaChart data={[
-                    {r:"Start",...Object.fromEntries(standings.map((p,i)=>[p.name.split(" ")[0],Math.max(5,25-i*3)]))},
-                    {r:"R1",   ...Object.fromEntries(standings.map((p,i)=>[p.name.split(" ")[0],Math.max(3,28-i*4)]))},
-                    {r:"R2",   ...Object.fromEntries(standings.map((p,i)=>[p.name.split(" ")[0],Math.max(2,32-i*5)]))},
-                    {r:"R3",   ...Object.fromEntries(standings.map((p,i)=>[p.name.split(" ")[0],Math.max(1,36-i*6)]))},
-                    {r:"R4",   ...Object.fromEntries(standings.map((p,i)=>[p.name.split(" ")[0],Math.max(0,i===0?55:i===1?25:i===2?12:5)]))},
-                  ]}>
+                  <AreaChart data={wp.data}>
                     <CartesianGrid stroke="var(--cream-2)" strokeDasharray="3 3"/>
                     <XAxis dataKey="r" tick={{fontSize:11,fill:"#78716C"}} axisLine={false} tickLine={false}/>
-                    <YAxis tick={{fontSize:11,fill:"#78716C"}} axisLine={false} tickLine={false} unit="%"/>
+                    <YAxis tick={{fontSize:11,fill:"#78716C"}} axisLine={false} tickLine={false} unit="%" domain={[0,100]}/>
                     <Tooltip content={<CTooltip/>}/>
-                    {standings.map((p,i)=>(
-                      <Area key={p.id} type="monotone" dataKey={p.name.split(" ")[0]} stroke={["#1B4332","#C8A94F","#40916C","#7E9B84","#B08968","#6B9BC0","#C0A0B0","#90A875"][i]} fill="none" strokeWidth={2} dot={{r:3}} name={p.name.split(" ")[0]}/>
+                    {wp.names.map((n,i)=>(
+                      <Area key={n} type="monotone" dataKey={n} stroke={["#1B4332","#C8A94F","#40916C","#7E9B84","#B08968","#6B9BC0","#C0A0B0","#90A875"][i%8]} fill="none" strokeWidth={2} dot={{r:3}} name={n}/>
                     ))}
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
-            )}
+              );
+            })()}
           </div>
         )}
 
@@ -4735,24 +4911,23 @@ export default function GolfPoolPro() {
                   </div>
 
                   {/* Win probability mini chart */}
+                  {(()=>{
+                    const wp=calcWinProb(standings,getTeam,liveScores,scoringGolfers);
+                    return (<>
                   <h4 className="h4" style={{marginTop:16,marginBottom:10}}>Win Probability</h4>
                   <ResponsiveContainer width="100%" height={200}>
-                    <AreaChart data={[
-                      {r:"Start",...Object.fromEntries(standings.map((p,i)=>[p.name.split(" ")[0],Math.max(5,25-i*3)]))},
-                      {r:"R1",...Object.fromEntries(standings.map((p,i)=>[p.name.split(" ")[0],Math.max(3,28-i*4)]))},
-                      {r:"R2",...Object.fromEntries(standings.map((p,i)=>[p.name.split(" ")[0],Math.max(2,32-i*5)]))},
-                      {r:"R3",...Object.fromEntries(standings.map((p,i)=>[p.name.split(" ")[0],Math.max(1,36-i*6)]))},
-                      {r:"R4",...Object.fromEntries(standings.map((p,i)=>[p.name.split(" ")[0],Math.max(0,i===0?55:i===1?25:i===2?12:5)]))},
-                    ]}>
+                    <AreaChart data={wp.data}>
                       <CartesianGrid stroke="var(--cream-2)" strokeDasharray="3 3"/>
                       <XAxis dataKey="r" tick={{fontSize:10,fill:"#78716C"}} axisLine={false} tickLine={false}/>
-                      <YAxis tick={{fontSize:10,fill:"#78716C"}} axisLine={false} tickLine={false} unit="%"/>
+                      <YAxis tick={{fontSize:10,fill:"#78716C"}} axisLine={false} tickLine={false} unit="%" domain={[0,100]}/>
                       <Tooltip content={<CTooltip/>}/>
-                      {standings.map((p,i)=>(
-                        <Area key={p.id} type="monotone" dataKey={p.name.split(" ")[0]} stroke={["#1B4332","#C8A94F","#40916C","#7E9B84","#B08968","#6B9BC0"][i]} fill="none" strokeWidth={2}/>
+                      {wp.names.map((n,i)=>(
+                        <Area key={n} type="monotone" dataKey={n} stroke={["#1B4332","#C8A94F","#40916C","#7E9B84","#B08968","#6B9BC0"][i%6]} fill="none" strokeWidth={2}/>
                       ))}
                     </AreaChart>
                   </ResponsiveContainer>
+                    </>);
+                  })()}
                 </div>
               )}
             </div>
@@ -4952,21 +5127,6 @@ export default function GolfPoolPro() {
                             </BarChart>
                           </ResponsiveContainer>
                         </div>
-                        {sg.length>0&&sg.some(d=>Math.abs(d.value)>0.01)&&(
-                          <div className="card">
-                            <h3 className="h3" style={{marginBottom:4}}>Strokes Gained</h3>
-                            <p className="sub" style={{marginBottom:16}}>SG breakdown by category</p>
-                            <ResponsiveContainer width="100%" height={220}>
-                              <RadarChart data={sg} margin={{top:10,right:10,bottom:10,left:10}}>
-                                <PolarGrid stroke="var(--parchment)"/>
-                                <PolarAngleAxis dataKey="stat" tick={{fontSize:10,fill:"#78716C"}}/>
-                                <PolarRadiusAxis angle={30} domain={[-0.5,2]} tick={{fontSize:8,fill:"#CBD5E1"}} tickCount={4}/>
-                                <Radar name={statsPlayer.name} dataKey="value" stroke="var(--forest)" fill="var(--forest)" fillOpacity={0.2} strokeWidth={2}/>
-                                <Tooltip content={<CTooltip/>}/>
-                              </RadarChart>
-                            </ResponsiveContainer>
-                          </div>
-                        )}
                       </div>
                       <div className="card">
                         <h3 className="h3" style={{marginBottom:14}}>Scoring Breakdown per Round</h3>
