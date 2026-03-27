@@ -3536,6 +3536,133 @@ export default function GolfPoolPro() {
                                   })()}
                                 </div>
                               </div>
+
+                              {/* Team Leaderboard Position Card */}
+                              <div style={{marginTop:20}}>
+                                <div className="card">
+                                  <h3 className="h3" style={{marginBottom:4}}>Team Leaderboard Positions</h3>
+                                  <p className="sub" style={{marginBottom:16}}>Position summary for your drafted golfers</p>
+                                  {(() => {
+                                    const teamPositions = myTeam.map(g => {
+                                      const ls = liveScores.find(l => l.gId === g.id);
+                                      const posStr = ls?.pos;
+                                      const posNum = posStr ? parseInt(String(posStr).replace(/[^0-9]/g, ''), 10) : null;
+                                      return { name: g.name, pos: isNaN(posNum) ? null : posNum };
+                                    }).filter(p => p.pos !== null);
+                                    if (!teamPositions.length) return <p style={{fontSize:13,color:"var(--muted)",textAlign:"center",padding:20}}>No position data available</p>;
+                                    const best = teamPositions.reduce((a, b) => a.pos < b.pos ? a : b);
+                                    const worst = teamPositions.reduce((a, b) => a.pos > b.pos ? a : b);
+                                    const avgPos = Math.round(teamPositions.reduce((s, p) => s + p.pos, 0) / teamPositions.length);
+                                    return (
+                                      <div className="g3" style={{gap:12}}>
+                                        {[
+                                          { label: "Best Position", value: `#${best.pos}`, sub: best.name.split(" ").pop(), color: "#1B4332" },
+                                          { label: "Worst Position", value: `#${worst.pos}`, sub: worst.name.split(" ").pop(), color: "#EF4444" },
+                                          { label: "Avg Position", value: `#${avgPos}`, sub: `${teamPositions.length} golfer${teamPositions.length !== 1 ? "s" : ""}`, color: "#C8A94F" },
+                                        ].map(item => (
+                                          <div key={item.label} style={{textAlign:"center",padding:"18px 12px",background:"var(--cream)",borderRadius:12}}>
+                                            <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:36,fontWeight:700,color:item.color,lineHeight:1}}>{item.value}</div>
+                                            <div style={{fontSize:13,fontWeight:600,color:"var(--forest)",marginTop:6}}>{item.label}</div>
+                                            <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{item.sub}</div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
+                              </div>
+
+                              {/* Cut Line Projection */}
+                              <div style={{marginTop:20}}>
+                                <div className="card">
+                                  <h3 className="h3" style={{marginBottom:4}}>Cut Line Projection</h3>
+                                  <p className="sub" style={{marginBottom:16}}>Which of your golfers are projected to make the cut</p>
+                                  {(() => {
+                                    const sortedField = liveScores
+                                      .map(s => ({ gId: s.gId, tot: sumRounds(s) }))
+                                      .filter(s => typeof s.tot === "number")
+                                      .sort((a, b) => a.tot - b.tot);
+                                    const cutPos = Math.floor(sortedField.length / 2);
+                                    const cutScore = cutPos > 0 && sortedField.length > cutPos ? sortedField[cutPos - 1].tot : null;
+                                    if (cutScore === null) return <p style={{fontSize:13,color:"var(--muted)",textAlign:"center",padding:20}}>Not enough data to project cut line</p>;
+                                    const teamCutStatus = myTeam.map(g => {
+                                      const ls = liveScores.find(l => l.gId === g.id);
+                                      const tot = sumRounds(ls);
+                                      const made = typeof tot === "number" ? tot <= cutScore : null;
+                                      return { name: g.name, tot, made };
+                                    });
+                                    const madeCount = teamCutStatus.filter(g => g.made === true).length;
+                                    const missedCount = teamCutStatus.filter(g => g.made === false).length;
+                                    return (
+                                      <div>
+                                        <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap"}}>
+                                          <div style={{padding:"10px 16px",background:"rgba(64,145,108,.1)",borderRadius:8,fontSize:13,fontWeight:600,color:"#40916C"}}>{madeCount} making cut</div>
+                                          <div style={{padding:"10px 16px",background:"rgba(239,68,68,.1)",borderRadius:8,fontSize:13,fontWeight:600,color:"#EF4444"}}>{missedCount} missing cut</div>
+                                          <div style={{padding:"10px 16px",background:"var(--cream)",borderRadius:8,fontSize:12,color:"var(--muted)"}}>Projected cut: {fmtScore(cutScore)}</div>
+                                        </div>
+                                        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                                          {teamCutStatus.map((g, i) => (
+                                            <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:g.made===true?"rgba(64,145,108,.05)":g.made===false?"rgba(239,68,68,.05)":"var(--cream)",borderRadius:8,border:`1px solid ${g.made===true?"rgba(64,145,108,.2)":g.made===false?"rgba(239,68,68,.2)":"var(--cream-2)"}`}}>
+                                              <span style={{fontSize:18}}>{g.made===true?"✅":g.made===false?"❌":"➖"}</span>
+                                              <span style={{flex:1,fontSize:13,fontWeight:600}}>{g.name}</span>
+                                              <span style={{fontSize:13,color:g.made===true?"#40916C":g.made===false?"#EF4444":"var(--muted)",fontWeight:600}}>{typeof g.tot==="number"?fmtScore(g.tot):"—"}</span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
+                              </div>
+
+                              {/* Momentum Tracker */}
+                              <div style={{marginTop:20}}>
+                                <div className="card">
+                                  <h3 className="h3" style={{marginBottom:4}}>Momentum Tracker</h3>
+                                  <p className="sub" style={{marginBottom:16}}>Hottest and coldest golfers based on round-over-round scoring change</p>
+                                  {(() => {
+                                    const momentum = liveScores.map(s => {
+                                      const g = findGolferById(s.gId);
+                                      if (!g) return null;
+                                      const rounds = [s.R1, s.R2, s.R3, s.R4].filter(v => typeof v === "number");
+                                      if (rounds.length < 2) return null;
+                                      const diff = rounds[rounds.length - 1] - rounds[rounds.length - 2];
+                                      return { name: g.name.split(" ").pop(), diff, gId: s.gId };
+                                    }).filter(Boolean);
+                                    if (momentum.length < 2) return <p style={{fontSize:13,color:"var(--muted)",textAlign:"center",padding:20}}>Need at least 2 rounds of data</p>;
+                                    const sorted = [...momentum].sort((a, b) => a.diff - b.diff);
+                                    const hottest = sorted.slice(0, 5);
+                                    const coldest = sorted.slice(-5).reverse();
+                                    const combined = [
+                                      ...hottest.map(m => ({ ...m, type: "hot" })),
+                                      ...coldest.filter(c => !hottest.find(h => h.gId === c.gId)).map(m => ({ ...m, type: "cold" })),
+                                    ];
+                                    const maxAbs = Math.max(...combined.map(m => Math.abs(m.diff)), 1);
+                                    return (
+                                      <div>
+                                        <div style={{display:"flex",gap:12,marginBottom:14}}>
+                                          <span style={{fontSize:11,fontWeight:600,color:"#40916C"}}>🔥 Trending Up</span>
+                                          <span style={{fontSize:11,fontWeight:600,color:"#EF4444"}}>🧊 Trending Down</span>
+                                        </div>
+                                        <ResponsiveContainer width="100%" height={Math.max(combined.length * 36, 120)}>
+                                          <BarChart data={combined} layout="vertical" margin={{top:0,right:20,bottom:0,left:60}}>
+                                            <CartesianGrid stroke="var(--cream-2)" horizontal={false}/>
+                                            <XAxis type="number" tick={{fontSize:10,fill:"#78716C"}} axisLine={false} tickLine={false} tickFormatter={v => v > 0 ? `+${v}` : String(v)} domain={[-maxAbs, maxAbs]}/>
+                                            <YAxis type="category" dataKey="name" tick={{fontSize:11,fill:"#78716C"}} axisLine={false} tickLine={false} width={55}/>
+                                            <Tooltip formatter={(v) => [v > 0 ? `+${v}` : String(v), "Momentum"]}/>
+                                            <ReferenceLine x={0} stroke="var(--parchment)" strokeWidth={1.5}/>
+                                            <Bar dataKey="diff" name="Change" maxBarSize={20}>
+                                              {combined.map((m, i) => (
+                                                <Cell key={i} fill={m.diff <= 0 ? "#40916C" : "#EF4444"} radius={m.diff <= 0 ? [4,0,0,4] : [0,4,4,0]}/>
+                                              ))}
+                                            </Bar>
+                                          </BarChart>
+                                        </ResponsiveContainer>
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
+                              </div>
                             </div>
                           );
                         })()}
@@ -3666,7 +3793,7 @@ export default function GolfPoolPro() {
                                     </BarChart>
                                   </ResponsiveContainer>
                                 </div>
-                                {sg.length>0&&(
+                                {sg.length>0&&sg.some(d=>Math.abs(d.value)>0.01)&&(
                                   <div className="card">
                                     <h3 className="h3" style={{marginBottom:4}}>Strokes Gained</h3>
                                     <p className="sub" style={{marginBottom:16}}>SG breakdown by category</p>
@@ -3769,10 +3896,10 @@ export default function GolfPoolPro() {
                           const statRows=[
                             {l:"Total Score",a:totA!==null?fmtScore(totA):"—",b:totB!==null?fmtScore(totB):"—",win:totA!==null&&totB!==null?(totA<totB?"a":totA>totB?"b":"e"):null},
                             {l:"World Rank",a:`#${compareA.rank}`,b:`#${compareB.rank}`,win:compareA.rank<compareB.rank?"a":compareA.rank>compareB.rank?"b":"e"},
-                            {l:"Scoring Avg",a:compareA.avg||"—",b:compareB.avg||"—",win:compareA.avg&&compareB.avg?(compareA.avg<compareB.avg?"a":compareA.avg>compareB.avg?"b":"e"):null},
-                            {l:"SG Total",a:compareA.sg?( compareA.sg>0?`+${compareA.sg}`:compareA.sg):"—",b:compareB.sg?(compareB.sg>0?`+${compareB.sg}`:compareB.sg):"—",win:compareA.sg&&compareB.sg?(compareA.sg>compareB.sg?"a":compareA.sg<compareB.sg?"b":"e"):null},
-                            {l:"Drive Dist",a:compareA.drivDist?`${compareA.drivDist} yds`:"— yds",b:compareB.drivDist?`${compareB.drivDist} yds`:"— yds",win:compareA.drivDist&&compareB.drivDist?(compareA.drivDist>compareB.drivDist?"a":compareA.drivDist<compareB.drivDist?"b":"e"):null},
-                            {l:"GIR %",a:compareA.gir?`${compareA.gir}%`:"—",b:compareB.gir?`${compareB.gir}%`:"—",win:compareA.gir&&compareB.gir?(compareA.gir>compareB.gir?"a":compareA.gir<compareB.gir?"b":"e"):null},
+                            ...(compareA.avg||compareB.avg?[{l:"Scoring Avg",a:compareA.avg||"—",b:compareB.avg||"—",win:compareA.avg&&compareB.avg?(compareA.avg<compareB.avg?"a":compareA.avg>compareB.avg?"b":"e"):null}]:[]),
+                            ...(compareA.sg||compareB.sg?[{l:"SG Total",a:compareA.sg?(compareA.sg>0?`+${compareA.sg}`:compareA.sg):"—",b:compareB.sg?(compareB.sg>0?`+${compareB.sg}`:compareB.sg):"—",win:compareA.sg&&compareB.sg?(compareA.sg>compareB.sg?"a":compareA.sg<compareB.sg?"b":"e"):null}]:[]),
+                            ...(compareA.drivDist||compareB.drivDist?[{l:"Drive Dist",a:compareA.drivDist?`${compareA.drivDist} yds`:"—",b:compareB.drivDist?`${compareB.drivDist} yds`:"—",win:compareA.drivDist&&compareB.drivDist?(compareA.drivDist>compareB.drivDist?"a":compareA.drivDist<compareB.drivDist?"b":"e"):null}]:[]),
+                            ...(compareA.gir||compareB.gir?[{l:"GIR %",a:compareA.gir?`${compareA.gir}%`:"—",b:compareB.gir?`${compareB.gir}%`:"—",win:compareA.gir&&compareB.gir?(compareA.gir>compareB.gir?"a":compareA.gir<compareB.gir?"b":"e"):null}]:[]),
                             ...(lsA&&lsB?[
                               {l:"Birdies",a:lsA.birdies.reduce((x,y)=>x+y,0),b:lsB.birdies.reduce((x,y)=>x+y,0),win:lsA.birdies.reduce((x,y)=>x+y,0)>lsB.birdies.reduce((x,y)=>x+y,0)?"a":"b"},
                               {l:"Eagles",a:lsA.eagles.reduce((x,y)=>x+y,0),b:lsB.eagles.reduce((x,y)=>x+y,0),win:lsA.eagles.reduce((x,y)=>x+y,0)>lsB.eagles.reduce((x,y)=>x+y,0)?"a":"b"},
@@ -3798,7 +3925,7 @@ export default function GolfPoolPro() {
                               </div>
 
                               {/* Round-by-round chart */}
-                              <div className="card">
+                              <div className="card" style={{marginBottom:16}}>
                                 <h3 className="h3" style={{marginBottom:4}}>Round by Round</h3>
                                 <p className="sub" style={{marginBottom:16}}>Score to par each round</p>
                                 <ResponsiveContainer width="100%" height={220}>
@@ -3814,6 +3941,51 @@ export default function GolfPoolPro() {
                                     <Bar dataKey={compareB.name.split(" ").pop()} fill="#C8A94F" radius={[3,3,0,0]} maxBarSize={32}/>
                                   </BarChart>
                                 </ResponsiveContainer>
+                              </div>
+
+                              {/* Round-by-Round Comparison Table */}
+                              <div className="card" style={{padding:0,overflow:"hidden"}}>
+                                <h3 className="h3" style={{padding:"16px 16px 4px"}}>Round-by-Round Scorecard</h3>
+                                <p className="sub" style={{padding:"0 16px 12px"}}>Side-by-side round scores with winner highlighted</p>
+                                <div style={{display:"grid",gridTemplateColumns:"70px 1fr 60px 1fr",background:"var(--forest)",padding:"8px 16px"}}>
+                                  <span style={{fontSize:11,color:"rgba(255,255,255,.5)"}}>Round</span>
+                                  <span style={{fontSize:12,fontWeight:700,color:"#fff",textAlign:"center"}}>{compareA.name.split(" ").pop()}</span>
+                                  <span style={{fontSize:11,color:"rgba(255,255,255,.5)",textAlign:"center"}}>vs</span>
+                                  <span style={{fontSize:12,fontWeight:700,color:"var(--gold)",textAlign:"center"}}>{compareB.name.split(" ").pop()}</span>
+                                </div>
+                                {["R1","R2","R3","R4"].map((rKey, ri) => {
+                                  const aVal = lsA ? lsA[rKey] : null;
+                                  const bVal = lsB ? lsB[rKey] : null;
+                                  const aNum = typeof aVal === "number" ? aVal : null;
+                                  const bNum = typeof bVal === "number" ? bVal : null;
+                                  const winner = (aNum !== null && bNum !== null) ? (aNum < bNum ? "a" : aNum > bNum ? "b" : "e") : null;
+                                  return (
+                                    <div key={rKey} style={{display:"grid",gridTemplateColumns:"70px 1fr 60px 1fr",padding:"10px 16px",borderBottom:"1px solid var(--cream-2)",background:ri%2===0?"#fff":"var(--cream)",alignItems:"center"}}>
+                                      <span style={{fontSize:12,fontWeight:600,color:"var(--muted)"}}>Round {ri+1}</span>
+                                      <div style={{textAlign:"center",padding:"6px 8px",borderRadius:6,background:winner==="a"?"rgba(27,67,50,.1)":"transparent"}}>
+                                        <span style={{fontSize:15,fontWeight:winner==="a"?700:400,color:winner==="a"?"#1B4332":"var(--text)"}}>{aNum!==null?fmtScore(aNum):"—"}</span>
+                                        {winner==="a"&&<span style={{marginLeft:6,fontSize:10,color:"#40916C"}}>W</span>}
+                                      </div>
+                                      <div style={{textAlign:"center",fontSize:11,color:"var(--muted)"}}>{(aNum!==null&&bNum!==null)?((aNum-bNum)<0?aNum-bNum:`+${aNum-bNum===0?"0":aNum-bNum}`):"—"}</div>
+                                      <div style={{textAlign:"center",padding:"6px 8px",borderRadius:6,background:winner==="b"?"rgba(200,169,79,.1)":"transparent"}}>
+                                        <span style={{fontSize:15,fontWeight:winner==="b"?700:400,color:winner==="b"?"#C8A94F":"var(--text)"}}>{bNum!==null?fmtScore(bNum):"—"}</span>
+                                        {winner==="b"&&<span style={{marginLeft:6,fontSize:10,color:"#C8A94F"}}>W</span>}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                                {(() => {
+                                  const aWins = ["R1","R2","R3","R4"].filter(r => {const a=lsA?lsA[r]:null,b=lsB?lsB[r]:null;return typeof a==="number"&&typeof b==="number"&&a<b;}).length;
+                                  const bWins = ["R1","R2","R3","R4"].filter(r => {const a=lsA?lsA[r]:null,b=lsB?lsB[r]:null;return typeof a==="number"&&typeof b==="number"&&b<a;}).length;
+                                  return (
+                                    <div style={{display:"grid",gridTemplateColumns:"70px 1fr 60px 1fr",padding:"12px 16px",background:"var(--forest)"}}>
+                                      <span style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,.6)"}}>Rounds Won</span>
+                                      <span style={{fontSize:15,fontWeight:700,color:"#fff",textAlign:"center"}}>{aWins}</span>
+                                      <span style={{fontSize:11,color:"rgba(255,255,255,.4)",textAlign:"center"}}>—</span>
+                                      <span style={{fontSize:15,fontWeight:700,color:"var(--gold)",textAlign:"center"}}>{bWins}</span>
+                                    </div>
+                                  );
+                                })()}
                               </div>
                             </div>
                           );
@@ -4780,7 +4952,7 @@ export default function GolfPoolPro() {
                             </BarChart>
                           </ResponsiveContainer>
                         </div>
-                        {sg.length>0&&(
+                        {sg.length>0&&sg.some(d=>Math.abs(d.value)>0.01)&&(
                           <div className="card">
                             <h3 className="h3" style={{marginBottom:4}}>Strokes Gained</h3>
                             <p className="sub" style={{marginBottom:16}}>SG breakdown by category</p>
