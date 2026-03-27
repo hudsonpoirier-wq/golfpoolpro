@@ -3786,9 +3786,9 @@ export default function GolfPoolPro() {
                                     <ResponsiveContainer width="100%" height={Math.max(sorted.length*32,120)}>
                                       <BarChart data={sorted} layout="vertical" margin={{top:0,right:20,bottom:0,left:60}}>
                                         <CartesianGrid stroke="var(--cream-2)" horizontal={false}/>
-                                        <XAxis type="number" tick={{fontSize:10,fill:"#78716C"}} axisLine={false} tickLine={false} tickFormatter={v=>v>0?`+${v}`:String(v)}/>
+                                        <XAxis type="number" tick={{fontSize:10,fill:"#78716C"}} axisLine={false} tickLine={false} tickFormatter={v=>v===0?"E":v>0?`+${v}`:String(v)} domain={[dataMin=>Math.min(dataMin,0),0]}/>
                                         <YAxis type="category" dataKey="name" tick={{fontSize:11,fill:"#78716C"}} axisLine={false} tickLine={false} width={55}/>
-                                        <Tooltip formatter={(v)=>[v>0?`+${v}`:String(v),"Score"]}/>
+                                        <Tooltip formatter={(v)=>[v===0?"E":v>0?`+${v}`:String(v),"Score"]}/>
                                         <ReferenceLine x={0} stroke="var(--parchment)" strokeWidth={1.5}/>
                                         <Bar dataKey="tot" name="Score" maxBarSize={18}>
                                           {sorted.map((s,i)=><Cell key={i} fill={s.isTeam?"var(--gold)":"#2D6A4F"}/>)}
