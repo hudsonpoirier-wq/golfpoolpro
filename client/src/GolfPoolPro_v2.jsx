@@ -1581,17 +1581,22 @@ export default function GolfPoolPro() {
     if (!activePool) return participants.filter(p=>p.joined);
     // Preserve backend join order so snake draft turn-taking matches the server.
     const ordered = activePoolMemberIds
-      .map((id) => participants.find((p) => String(p.id) === String(id)))
-      .filter(Boolean);
+      .map((id) => {
+        const found = participants.find((p) => String(p.id) === String(id));
+        if (found) return found;
+        // Member exists on server but hasn't been merged into participants yet — create a stub
+        // so they appear immediately in the draft room / lobby.
+        return { id, name: "Player", avatar: "PL", email: "", joined: true, _stub: true };
+      });
     if (ordered.length) return ordered;
     const fallbackUserId = apiSession.get()?.id || currentUser;
     if (!fallbackUserId) return [];
     const me = participants.find((p)=>String(p.id)===String(fallbackUserId));
     return me ? [me] : [];
   })();
-  const lobbyVisibleParticipants = poolPhase === "lobby"
-    ? joinedParticipants.filter((p) => activeLobbyUserIds.some((id) => String(id) === String(p.id)))
-    : joinedParticipants;
+  // Show ALL joined members in lobby (not just those with active heartbeat) so new joiners
+  // appear immediately. Use activeLobbyUserIds only for online/offline indicator.
+  const lobbyVisibleParticipants = joinedParticipants;
   const poolIsFull = !!activePool && joinedParticipants.length >= Number(activePool.maxParticipants || 0);
 
   // Get picks for active pool (or current draft)
@@ -2243,6 +2248,27 @@ export default function GolfPoolPro() {
       } catch (detailsErr) {
         // Keep join flow resilient: if details fetch fails, still route to lobby with invite data.
         console.warn("Pool details fetch failed after join; using invite fallback:", detailsErr?.message || detailsErr);
+      }
+      // Sync members + picks from the join response so the draft room shows everyone immediately
+      if (details?.members?.length) {
+        const mappedPeople = details.members.map((m) => ({
+          id: m.user_id,
+          name: m.profile?.name || "Player",
+          avatar: m.profile?.avatar || ((m.profile?.name || "PL").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()),
+          email: m.profile?.email || "",
+          joined: true,
+        }));
+        setParticipants((prev) => {
+          const byId = new Map(prev.map((p) => [p.id, p]));
+          mappedPeople.forEach((p) => byId.set(p.id, { ...(byId.get(p.id) || {}), ...p, joined: true }));
+          return [...byId.values()];
+        });
+        setPoolMembers((prev) => ({ ...prev, [joinedPoolId]: mappedPeople.map((p) => p.id) }));
+        if (details.picks?.length) {
+          setDrafted(details.picks.map((p) => ({ golferId: p.golfer_id, participantId: p.user_id, pickNum: p.pick_number })));
+          setAllDrafted((prev) => ({ ...prev, [joinedPoolId]: details.picks.map((p) => ({ golferId: p.golfer_id, participantId: p.user_id, pickNum: p.pick_number })) }));
+          setCurrentPick(details.picks.length);
+        }
       }
       const bp = details?.pool || {};
       const mappedPool = {
@@ -3023,7 +3049,7 @@ export default function GolfPoolPro() {
                     <p style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"1px",color:"rgba(255,255,255,.6)",marginBottom:6}}>Draft Lobby</p>
                     <h2 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:32,fontWeight:700,color:"#fff",marginBottom:8}}>{activePool.name}</h2>
                     <p style={{color:"rgba(255,255,255,.7)",fontSize:14}}>
-                      {lobbyReadyCount}/{lobbyVisibleParticipants.length} currently in lobby
+                      {lobbyReadyCount}/{lobbyVisibleParticipants.length} ready · {lobbyVisibleParticipants.length} joined
                       {allReady?" · Launching draft…":""}
                     </p>
                   </div>
@@ -3045,13 +3071,17 @@ export default function GolfPoolPro() {
                     <div className="ready-grid">
                       {lobbyVisibleParticipants.map(p=>{
                         const isReady = !!poolReadyMap[p.id];
+                        const isOnline = activeLobbyUserIds.some((id) => String(id) === String(p.id));
                         return (
-                          <div key={p.id} className={`ready-card ${isReady?"is-ready":""}`}>
-                            <Avatar init={p.avatar} color={isReady?"var(--green)":"var(--forest)"} size={36}/>
+                          <div key={p.id} className={`ready-card ${isReady?"is-ready":""}`} style={{opacity:isOnline?1:0.6}}>
+                            <div style={{position:"relative"}}>
+                              <Avatar init={p.avatar} color={isReady?"var(--green)":"var(--forest)"} size={36}/>
+                              {isOnline && <div style={{position:"absolute",bottom:-1,right:-1,width:10,height:10,borderRadius:"50%",background:"#16A34A",border:"2px solid #fff"}}/>}
+                            </div>
                             <div style={{flex:1}}>
                               <p style={{fontWeight:600,fontSize:13}}>{p.name}</p>
                               <p style={{fontSize:11,color:isReady?"var(--green)":"var(--muted)"}}>
-                                {isReady?"✓ Ready":"Waiting…"}
+                                {isReady?"✓ Ready":isOnline?"Waiting…":"Offline"}
                               </p>
                             </div>
                             {isHostOfActivePool && String(p.id) !== String(activePool.hostId) && activePool.status==="lobby" && (
