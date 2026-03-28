@@ -784,6 +784,95 @@ const calcWinProb = (participants, getTeamFn, liveScoresList, scoringCount, cutL
   return { data: rows, names };
 };
 
+/**
+ * Compute a single win% snapshot based on current live state.
+ * Returns { [firstName]: pct, ... } or null if no data.
+ */
+const calcWinPctSnapshot = (participants, getTeamFn, liveScoresList, scoringCount, cutLine) => {
+  if (!participants?.length || !liveScoresList?.length) return null;
+  const roundKeys = ["R1","R2","R3","R4"];
+  const names = participants.map(p => p.name.split(" ")[0]);
+  const CUT_POSITIONS = new Set(["CUT","WD","DQ","MDF"]);
+
+  const teamInfo = participants.map(p => {
+    const team = getTeamFn(p.id);
+    const golfers = team.map(g => {
+      const ls = liveScoresList.find(l => l.gId === g.id);
+      const isCut = ls ? CUT_POSITIONS.has(String(ls.pos || "").toUpperCase()) : false;
+      const posNum = ls?.pos ? parseInt(String(ls.pos).replace(/[^0-9]/g, ''), 10) : null;
+      return { g, ls, isCut, posNum: isNaN(posNum) ? null : posNum };
+    });
+    const activeCount = golfers.filter(gf => !gf.isCut).length;
+    const eliminated = cutLine ? activeCount < cutLine : false;
+    const atCutRisk = cutLine ? activeCount === cutLine : false;
+    return { golfers, activeCount, eliminated, atCutRisk };
+  });
+
+  // Use ALL available round data (including mid-round scores that update every 30s)
+  const cumScores = participants.map((p, pi) => {
+    if (teamInfo[pi].eliminated) return null;
+    const golferTotals = teamInfo[pi].golfers.map(gf => {
+      if (!gf.ls || gf.isCut) return null;
+      const rds = roundKeys.map(rk => gf.ls[rk]).filter(v => typeof v === "number");
+      return rds.length > 0 ? rds.reduce((a, b) => a + b, 0) : null;
+    }).filter(v => v !== null).sort((a, b) => a - b);
+    const best = golferTotals.slice(0, scoringCount);
+    return best.length > 0 ? best.reduce((a, b) => a + b, 0) : null;
+  });
+
+  const validScores = cumScores.filter(v => v !== null);
+  if (validScores.length === 0) return null;
+  const minScore = Math.min(...validScores);
+
+  // Determine current round for alpha scaling
+  const maxRound = roundKeys.reduce((mx, rk) => {
+    return liveScoresList.some(s => typeof s[rk] === "number") ? roundKeys.indexOf(rk) + 1 : mx;
+  }, 0);
+  const alpha = 0.15 + (maxRound - 1) * 0.12;
+
+  // Momentum: most recent round with data
+  const recentRoundKey = maxRound > 0 ? roundKeys[maxRound - 1] : null;
+  const momentumFactors = participants.map((_, pi) => {
+    if (teamInfo[pi].eliminated || !recentRoundKey) return 0;
+    const scores = teamInfo[pi].golfers
+      .filter(gf => gf.ls && !gf.isCut && typeof gf.ls[recentRoundKey] === "number")
+      .map(gf => gf.ls[recentRoundKey]).sort((a, b) => a - b).slice(0, scoringCount);
+    if (!scores.length) return 0;
+    const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+    return -avg * (0.03 + (maxRound - 1) * 0.02);
+  });
+
+  // Position bonus
+  const positionFactors = participants.map((_, pi) => {
+    if (teamInfo[pi].eliminated) return 0;
+    const positions = teamInfo[pi].golfers
+      .filter(gf => !gf.isCut && gf.posNum !== null)
+      .map(gf => gf.posNum).sort((a, b) => a - b).slice(0, scoringCount);
+    if (!positions.length) return 0;
+    const avgPos = positions.reduce((a, b) => a + b, 0) / positions.length;
+    return Math.max(0, (50 - avgPos) * 0.005 * (1 + (maxRound - 1) * 0.3));
+  });
+
+  const exps = cumScores.map((s, i) => {
+    if (teamInfo[i].eliminated) return 0;
+    if (s === null) return 0.001;
+    let logit = -alpha * (s - minScore);
+    logit += momentumFactors[i];
+    logit += positionFactors[i];
+    if (teamInfo[i].atCutRisk) logit -= 0.3 * maxRound;
+    return Math.exp(logit);
+  });
+  const total = exps.reduce((a, b) => a + b, 0);
+  const probs = exps.map(e => total > 0 ? Math.round((e / total) * 100) : 0);
+  const probSum = probs.reduce((a, b) => a + b, 0);
+  if (probSum > 0 && probSum !== 100) {
+    const firstActive = probs.findIndex((_, i) => !teamInfo[i].eliminated);
+    if (firstActive >= 0) probs[firstActive] += 100 - probSum;
+  }
+
+  return Object.fromEntries(names.map((n, i) => [n, probs[i]]));
+};
+
 const Avatar = ({init,size=32,color="#1B4332"}) => (
   <div style={{width:size,height:size,borderRadius:"50%",background:color,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:size*.35,fontWeight:700,flexShrink:0,letterSpacing:"0.5px"}}>
     {init}
@@ -1012,10 +1101,13 @@ export default function GolfPoolPro() {
   const timerRef = useRef(null);
   const [filterPos,setFilterPos] = useState("all");
 
-  // Live scores state — updates every 5 minutes (matches GitHub Actions cron)
+  // Live scores state — updates every 30 seconds
   const [liveScores,setLiveScores] = useState([]);
   const [lastUpdated,setLastUpdated] = useState(new Date());
   const [countdown,setCountdown] = useState(SCORE_REFRESH_SECONDS);
+  // Win probability history — snapshots stored every score refresh
+  const winProbHistoryRef = useRef([]);
+  const [winProbHistory, setWinProbHistory] = useState([]);
   const nextRefreshAtRef = useRef(0);
   const hasBackendSession = !!apiToken.get() || !!apiToken.getRefresh();
 
@@ -3855,22 +3947,78 @@ export default function GolfPoolPro() {
                 })()}
 
                 {poolTab==="prob" && (()=>{
-                  const wp=calcWinProb(poolStandings,getPoolTeam,liveScores,sc,activePool?.cutLine||2);
+                  // Compute current snapshot and record it
+                  const snapshot = calcWinPctSnapshot(poolStandings, getPoolTeam, liveScores, sc, activePool?.cutLine||2);
+                  const participantNames = poolStandings.map(p => p.name.split(" ")[0]);
+                  if (snapshot) {
+                    const hist = winProbHistoryRef.current;
+                    const lastEntry = hist[hist.length - 1];
+                    const now = Date.now();
+                    // Only add if 20+ seconds since last entry or values changed
+                    const changed = !lastEntry || participantNames.some(n => lastEntry[n] !== snapshot[n]);
+                    if (!lastEntry || (changed && now - lastEntry._ts >= 20000) || now - lastEntry._ts >= 30000) {
+                      const timeLabel = new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+                      const entry = { t: timeLabel, _ts: now, ...snapshot };
+                      hist.push(entry);
+                      // Keep max 200 entries (~100 min of data)
+                      if (hist.length > 200) hist.splice(0, hist.length - 200);
+                      // Trigger re-render with new data
+                      if (hist.length !== winProbHistory.length || changed) {
+                        setWinProbHistory([...hist]);
+                      }
+                    }
+                  }
+
+                  // Also compute round-based data as anchor points
+                  const wp = calcWinProb(poolStandings, getPoolTeam, liveScores, sc, activePool?.cutLine||2);
+
+                  // Merge: show round anchors + live timeline
+                  const hasTimeline = winProbHistory.length >= 2;
+                  const chartData = hasTimeline ? winProbHistory.map(h => {
+                    const row = { t: h.t };
+                    participantNames.forEach(n => { row[n] = h[n] ?? 0; });
+                    return row;
+                  }) : wp.data;
+                  const xKey = hasTimeline ? "t" : "r";
+
                   return (
                   <div className="card">
                     <h3 className="h3" style={{marginBottom:4}}>Win Probability</h3>
-                    <p className="sub" style={{marginBottom:18}}>Win % after each round based on actual team scores (softmax model)</p>
+                    <p className="sub" style={{marginBottom:18}}>
+                      {hasTimeline
+                        ? `Live win % · updates every 30s · ${winProbHistory.length} snapshots`
+                        : "Win % after each round based on actual team scores"}
+                    </p>
                     <ResponsiveContainer width="100%" height={280}>
-                      <AreaChart data={wp.data}>
+                      <AreaChart data={chartData}>
                         <CartesianGrid stroke="var(--cream-2)" strokeDasharray="3 3"/>
-                        <XAxis dataKey="r" tick={{fontSize:11,fill:"#78716C"}} axisLine={false} tickLine={false}/>
+                        <XAxis dataKey={xKey} tick={{fontSize:10,fill:"#78716C"}} axisLine={false} tickLine={false} interval={hasTimeline ? Math.max(0, Math.floor(chartData.length / 8) - 1) : 0}/>
                         <YAxis tick={{fontSize:11,fill:"#78716C"}} axisLine={false} tickLine={false} unit="%" domain={[0,100]}/>
-                        <Tooltip content={<CTooltip/>}/>
-                        {wp.names.map((n,i)=>(
-                          <Area key={n} type="monotone" dataKey={n} stroke={["#1B4332","#C8A94F","#40916C","#7E9B84","#B08968","#6B9BC0"][i%6]} fill="none" strokeWidth={2} dot={{r:3}} name={n}/>
+                        <Tooltip content={({active,payload,label})=>{
+                          if(!active||!payload?.length) return null;
+                          return <div className="ctt">
+                            <p style={{fontWeight:700,marginBottom:5,fontSize:11,color:"#78716C",textTransform:"uppercase",letterSpacing:"0.5px"}}>{label}</p>
+                            {[...payload].sort((a,b)=>(b.value||0)-(a.value||0)).map((p,i)=>(
+                              <p key={i} style={{color:p.color,marginBottom:2,fontWeight:p.value>=50?700:400}}>
+                                {p.name}: {p.value}%{p.value===0?" (eliminated)":""}
+                              </p>
+                            ))}
+                          </div>;
+                        }}/>
+                        {(hasTimeline ? participantNames : wp.names).map((n,i)=>(
+                          <Area key={n} type="monotone" dataKey={n} stroke={["#1B4332","#C8A94F","#40916C","#7E9B84","#B08968","#6B9BC0"][i%6]} fill="none" strokeWidth={2} dot={hasTimeline ? false : {r:3}} name={n}/>
                         ))}
                       </AreaChart>
                     </ResponsiveContainer>
+                    {snapshot && <div style={{display:"flex",gap:12,flexWrap:"wrap",marginTop:12,justifyContent:"center"}}>
+                      {participantNames.map((n,i)=>(
+                        <div key={n} style={{display:"flex",alignItems:"center",gap:6,fontSize:12}}>
+                          <div style={{width:10,height:10,borderRadius:"50%",background:["#1B4332","#C8A94F","#40916C","#7E9B84","#B08968","#6B9BC0"][i%6]}}/>
+                          <span style={{fontWeight:600}}>{n}</span>
+                          <span style={{fontWeight:700,color:snapshot[n]===0?"#EF4444":snapshot[n]>=40?"#16A34A":"var(--forest)"}}>{snapshot[n]}%</span>
+                        </div>
+                      ))}
+                    </div>}
                   </div>
                   );
                 })()}
