@@ -4188,7 +4188,7 @@ export default function GolfPoolPro() {
                               </div>
 
                               {/* Stat pills — team-specific */}
-                              <div className="g4" style={{marginBottom:20}}>
+                              <div className="g2" style={{marginBottom:20}}>
                                 {[
                                   {n:fmtScore(bestGolferScore),l:"Best Golfer Score",sub:bestGolfer?.name.split(" ").pop()||"—"},
                                   {n:bestRound!==null?fmtScore(bestRound):"—",l:"Best Single Round",sub:"On your team"},
