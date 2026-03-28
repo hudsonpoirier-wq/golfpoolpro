@@ -4322,64 +4322,6 @@ export default function GolfPoolPro() {
                                 );
                               })()}
 
-                              {/* Cumulative Team Score Area Chart */}
-                              {(()=>{
-                                const roundLabels=["R1","R2","R3","R4"];
-                                const areaData=[];
-                                let cumTeam=0, cumField=0;
-                                for(let ri=0;ri<roundLabels.length;ri++){
-                                  const r=roundLabels[ri];
-                                  let teamScores=[];
-                                  myTeam.forEach(g=>{
-                                    const ls=liveScores.find(l=>l.gId===g.id);
-                                    if(ls&&ls[r]!==null&&ls[r]!==undefined) teamScores.push(ls[r]);
-                                  });
-                                  if(chartCountingOnly && teamScores.length > sc){
-                                    teamScores=[...teamScores].sort((a,b)=>a-b).slice(0,sc);
-                                  }
-                                  const teamAvg=teamScores.length?Math.round((teamScores.reduce((a,b)=>a+b,0)/teamScores.length)*10)/10:0;
-                                  let fieldSum=0, fieldCount=0;
-                                  liveScores.forEach(s=>{
-                                    if(s[r]!==null&&s[r]!==undefined){fieldSum+=s[r];fieldCount++;}
-                                  });
-                                  const fieldAvg=fieldCount?Math.round((fieldSum/fieldCount)*10)/10:0;
-                                  cumTeam+=teamAvg; cumField+=fieldAvg;
-                                  areaData.push({round:r,team:Math.round(cumTeam*10)/10,field:Math.round(cumField*10)/10});
-                                }
-                                if(!areaData.some(d=>d.team!==0)) return null;
-                                return (
-                                  <div className="card" style={{marginTop:0}}>
-                                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:8}}>
-                                      <h3 className="h3" style={{margin:0}}>Cumulative Score Trend</h3>
-                                      <div style={{display:"flex",background:"var(--cream)",borderRadius:8,overflow:"hidden",border:"1px solid var(--cream-2)"}}>
-                                        <button onClick={()=>setChartCountingOnly(false)} style={{padding:"4px 12px",fontSize:11,fontWeight:700,border:"none",cursor:"pointer",background:!chartCountingOnly?"var(--forest)":"transparent",color:!chartCountingOnly?"#fff":"var(--muted)",transition:"all .2s"}}>Full Team</button>
-                                        <button onClick={()=>setChartCountingOnly(true)} style={{padding:"4px 12px",fontSize:11,fontWeight:700,border:"none",cursor:"pointer",background:chartCountingOnly?"var(--forest)":"transparent",color:chartCountingOnly?"#fff":"var(--muted)",transition:"all .2s"}}>Best {sc}</button>
-                                      </div>
-                                    </div>
-                                    <p className="sub" style={{marginBottom:16}}>{chartCountingOnly?`Best ${sc} golfers'`:"Your team's"} cumulative average vs field average over rounds</p>
-                                    <ResponsiveContainer width="100%" height={220}>
-                                      <AreaChart data={areaData} margin={{top:10,right:10,bottom:0,left:0}}>
-                                        <defs>
-                                          <linearGradient id="teamGrad" x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="5%" stopColor="#1B4332" stopOpacity={0.3}/>
-                                            <stop offset="95%" stopColor="#1B4332" stopOpacity={0}/>
-                                          </linearGradient>
-                                          <linearGradient id="fieldGrad" x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="5%" stopColor="#C8A94F" stopOpacity={0.3}/>
-                                            <stop offset="95%" stopColor="#C8A94F" stopOpacity={0}/>
-                                          </linearGradient>
-                                        </defs>
-                                        <CartesianGrid stroke="var(--cream-2)" strokeDasharray="3 3"/>
-                                        <XAxis dataKey="round" tick={{fontSize:11,fill:"#78716C"}} axisLine={false} tickLine={false}/>
-                                        <YAxis tick={{fontSize:10,fill:"#78716C"}} axisLine={false} tickLine={false} tickFormatter={v=>v>0?`+${v}`:String(v)}/>
-                                        <Tooltip content={<CTooltip/>}/>
-                                        <Area type="monotone" dataKey="team" name={chartCountingOnly?`Best ${sc}`:"Your Team"} stroke="#1B4332" fill="url(#teamGrad)" strokeWidth={2.5}/>
-                                        <Area type="monotone" dataKey="field" name="Field Avg" stroke="#C8A94F" fill="url(#fieldGrad)" strokeWidth={2} strokeDasharray="5 5"/>
-                                      </AreaChart>
-                                    </ResponsiveContainer>
-                                  </div>
-                                );
-                              })()}
                             </div>
                           );
                         })()}
