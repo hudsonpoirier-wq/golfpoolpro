@@ -197,6 +197,65 @@ select.inp{cursor:pointer}
 .search-wrap{position:relative;margin-bottom:10px}
 .search-wrap svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);pointer-events:none}
 .search-inp{padding-left:34px!important}
+
+/* ═══ MOBILE RESPONSIVE ═══ */
+@media(max-width:768px){
+  .nav{padding:0 12px;height:52px}
+  .nav-home-btn{padding:5px 10px;font-size:11px}
+  .nav-user{padding:4px 8px}
+  .nav-user span{font-size:11px}
+  .page{padding:16px 12px}
+  .page-wide{padding:14px 10px}
+  .hero{padding:48px 16px}
+  .hero-title{font-size:32px}
+  .hero-sub{font-size:13px;margin-bottom:20px}
+  .hero-logo{max-width:280px}
+  .h1{font-size:28px}
+  .h2{font-size:22px}
+  .h3{font-size:17px}
+  .sub{font-size:12px}
+  .g2,.g3,.g4{grid-template-columns:1fr;gap:12px}
+  .card{padding:14px;border-radius:12px}
+  .card-sm{padding:10px}
+  .tabs{flex-wrap:wrap;gap:2px}
+  .tab{padding:6px 8px;font-size:11px;flex:unset}
+  .pool-card{padding:14px}
+  .btn{padding:8px 14px;font-size:12px}
+  .btn-sm{padding:5px 10px;font-size:11px}
+  .phase-banner{padding:16px 14px;border-radius:12px}
+  .phase-banner::after{font-size:32px;right:10px}
+  .ready-grid{grid-template-columns:1fr;gap:8px}
+  .ready-card{padding:10px 12px}
+  .link-box{flex-direction:column;align-items:stretch;gap:6px}
+  .link-txt{max-width:100%}
+  .portal-wrap{padding:16px 10px}
+  .portal-card{padding:24px 18px;border-radius:16px}
+  .stat-pill{padding:8px 10px}
+  .stat-pill-n{font-size:22px}
+  .lb-row{padding:8px 10px;font-size:12px;gap:4px}
+  .lb-hdr{font-size:9px;padding:6px 10px}
+  .pick-row{padding:7px 8px;gap:6px}
+  .draft-layout{grid-template-columns:1fr;height:auto;min-height:auto;gap:10px}
+  .draft-panel{border-radius:10px}
+  .panel-hdr{padding:10px 12px}
+  .clock-wrap{padding:12px}
+  .order-row{padding:5px 8px}
+  .tourney-expand-hdr{padding:10px 12px}
+  .tourney-expand-body{padding:12px}
+  .auth-tab{font-size:13px;padding:8px}
+  .update-bar{padding:6px 10px;font-size:11px}
+  .search-inp{font-size:14px!important}
+  .inp{font-size:14px;padding:9px 11px}
+}
+@media(max-width:480px){
+  .hero-title{font-size:26px}
+  .hero{padding:36px 12px}
+  .h1{font-size:24px}
+  .h2{font-size:19px}
+  .portal-card{padding:20px 14px}
+  .tabs{border-radius:7px;padding:2px}
+  .tab{padding:5px 6px;font-size:10px}
+}
 `;
 
 /* ─── DATA ─── */
@@ -2312,7 +2371,7 @@ export default function GolfPoolPro() {
     <>
       <style>{CSS}</style>
       {notification && (
-        <div style={{position:"fixed",bottom:24,right:24,zIndex:9999,background:notification.type==="success"?"var(--forest)":"var(--red)",color:"#fff",padding:"12px 20px",borderRadius:10,fontSize:14,fontWeight:600,boxShadow:"var(--sh-md)",animation:"fadeUp .25s ease"}}>
+        <div style={{position:"fixed",bottom:24,left:12,right:12,maxWidth:400,marginLeft:"auto",zIndex:9999,background:notification.type==="success"?"var(--forest)":"var(--red)",color:"#fff",padding:"12px 20px",borderRadius:10,fontSize:14,fontWeight:600,boxShadow:"var(--sh-md)",animation:"fadeUp .25s ease"}}>
           {notification.msg}
         </div>
       )}
@@ -2378,7 +2437,7 @@ export default function GolfPoolPro() {
             const user = participants.find(p=>p.id===getEffectiveUserId()) || {name:getEffectiveUserName(),avatar:getEffectiveUserAvatar(),email:getEffectiveUserEmail()};
             const account = accounts.find(a=>a.id===currentUser) || {email:getEffectiveUserEmail()};
             return (
-              <div style={{position:"fixed",top:66,right:16,zIndex:400,width:320,background:"#fff",borderRadius:16,boxShadow:"0 16px 48px rgba(27,67,50,.18),0 4px 12px rgba(27,67,50,.08)",border:"1px solid rgba(27,67,50,.08)",overflow:"hidden"}}>
+              <div style={{position:"fixed",top:56,right:8,left:8,zIndex:400,maxWidth:340,marginLeft:"auto",background:"#fff",borderRadius:16,boxShadow:"0 16px 48px rgba(27,67,50,.18),0 4px 12px rgba(27,67,50,.08)",border:"1px solid rgba(27,67,50,.08)",overflow:"hidden"}}>
                 <div style={{background:"var(--forest)",padding:"18px 20px",display:"flex",alignItems:"center",gap:12}}>
                   <Avatar init={user?.avatar||"AD"} size={40} color="var(--gold)"/>
                   <div>
@@ -2438,7 +2497,7 @@ export default function GolfPoolPro() {
 
         {/* ──────── ADMIN PANEL ──────── */}
         {view==="admin" && isAdmin && (
-          <div className="page" style={{paddingTop:80,maxWidth:1100,margin:"0 auto"}}>
+          <div className="page" style={{paddingTop:70,maxWidth:1100,margin:"0 auto"}}>
             <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:24}}>
               <h2 className="h2" style={{color:"var(--forest)"}}>Admin Panel</h2>
               <button className="btn btn-sm" onClick={loadAdminData} disabled={adminLoading} style={{fontSize:11,padding:"5px 12px"}}>
@@ -3595,7 +3654,7 @@ export default function GolfPoolPro() {
 
                 {poolTab==="leaderboard" && (
                   <div className="card" style={{padding:0,overflow:"hidden"}}>
-                    <div className="lb-row lb-hdr" style={{gridTemplateColumns:"36px 1fr 50px 50px 50px 50px 60px"}}>
+                    <div className="lb-row lb-hdr" style={{gridTemplateColumns:"36px 1fr minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(44px,60px)"}}>
                       <span>Pos</span><span>Player</span><span style={{textAlign:"right"}}>R1</span><span style={{textAlign:"right"}}>R2</span><span style={{textAlign:"right"}}>R3</span><span style={{textAlign:"right"}}>R4</span><span style={{textAlign:"right"}}>Total</span>
                     </div>
 	                    {[...liveScores]
@@ -3607,7 +3666,7 @@ export default function GolfPoolPro() {
                         const isInPool = draftedGolferIds.has(g.id);
                         const pos = idx+1;
                         return (
-                          <div key={s.gId} className="lb-row" style={{gridTemplateColumns:"36px 1fr 50px 50px 50px 50px 60px",cursor:"pointer",background:isInPool?"rgba(27,67,50,.04)":"transparent"}}
+                          <div key={s.gId} className="lb-row" style={{gridTemplateColumns:"36px 1fr minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(44px,60px)",cursor:"pointer",background:isInPool?"rgba(27,67,50,.04)":"transparent"}}
                             onClick={()=>{setPoolStatsPlayer(g);setPoolTab("stats");setPoolStatsTab("player");}}>
                             <div style={{width:26,height:26,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,background:pos===1?"var(--gold-pale)":pos===2?"#E2E8F0":pos===3?"#FEE2CC":isInPool?"rgba(27,67,50,.08)":"var(--cream-2)",color:pos<=3?["#7A5C00","#475569","#9A3412"][pos-1]:isInPool?"var(--forest)":"var(--muted)"}}>{pos}</div>
                             <div>
@@ -4268,7 +4327,7 @@ export default function GolfPoolPro() {
 
                     {poolStatsTab==="players" && (
                       <div className="card" style={{padding:0,overflow:"hidden"}}>
-                        <div className="lb-row lb-hdr" style={{gridTemplateColumns:"36px 1fr 60px 60px 60px 60px 70px"}}>
+                        <div className="lb-row lb-hdr" style={{gridTemplateColumns:"36px 1fr minmax(40px,60px) minmax(40px,60px) minmax(40px,60px) minmax(40px,60px) minmax(48px,70px)"}}>
                           <span>#</span><span>Player</span><span style={{textAlign:"right"}}>R1</span><span style={{textAlign:"right"}}>R2</span><span style={{textAlign:"right"}}>R3</span><span style={{textAlign:"right"}}>R4</span><span style={{textAlign:"right"}}>Total</span>
                         </div>
 	                        {[...poolTournamentField].sort((a,b)=>{
@@ -4284,7 +4343,7 @@ export default function GolfPoolPro() {
                           const pick=poolPicks.find(p=>p.golferId===g.id);
                           const drafter=joinedParticipants.find(p=>p.id===pick?.participantId);
                           return (
-                            <div key={g.id} className="lb-row" style={{gridTemplateColumns:"36px 1fr 60px 60px 60px 60px 70px",cursor:"pointer",background:isInPool?"rgba(27,67,50,.03)":"transparent"}} onClick={()=>{setPoolStatsPlayer(g);setPoolStatsTab("player");}}>
+                            <div key={g.id} className="lb-row" style={{gridTemplateColumns:"36px 1fr minmax(40px,60px) minmax(40px,60px) minmax(40px,60px) minmax(40px,60px) minmax(48px,70px)",cursor:"pointer",background:isInPool?"rgba(27,67,50,.03)":"transparent"}} onClick={()=>{setPoolStatsPlayer(g);setPoolStatsTab("player");}}>
                               <div style={{width:26,height:26,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,background:idx===0?"var(--gold-pale)":idx===1?"#E2E8F0":idx===2?"#FEE2CC":isInPool?"rgba(27,67,50,.08)":"var(--cream-2)",color:idx<3?["#7A5C00","#475569","#9A3412"][idx]:isInPool?"var(--forest)":"var(--muted)"}}>{idx+1}</div>
                               <div>
                                 <p style={{fontWeight:isInPool?700:600,fontSize:14}}>{g.country} {g.name}{isInPool&&<span style={{marginLeft:6,fontSize:10,background:"var(--gold-pale)",color:"#7A5C00",padding:"1px 5px",borderRadius:3,fontWeight:700}}>★ {drafter?.name?.split(" ")[0]||"Pool"}</span>}</p>
@@ -5114,7 +5173,7 @@ export default function GolfPoolPro() {
 
             {analyticsTab==="leaderboard" && (
               <div className="card" style={{padding:0,overflow:"hidden"}}>
-                <div className="lb-row lb-hdr" style={{gridTemplateColumns:"36px 1fr 50px 50px 50px 50px 60px"}}>
+                <div className="lb-row lb-hdr" style={{gridTemplateColumns:"36px 1fr minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(44px,60px)"}}>
                   <span>Pos</span><span>Player</span><span style={{textAlign:"right"}}>R1</span><span style={{textAlign:"right"}}>R2</span><span style={{textAlign:"right"}}>R3</span><span style={{textAlign:"right"}}>R4</span><span style={{textAlign:"right"}}>Total</span>
                 </div>
                 {liveScores.map(s=>{
@@ -5122,7 +5181,7 @@ export default function GolfPoolPro() {
                   if(!g) return null;
                   const tot=s.R1+s.R2+s.R3+s.R4;
                   return (
-                    <div key={s.gId} className="lb-row" style={{gridTemplateColumns:"36px 1fr 50px 50px 50px 50px 60px",cursor:"pointer"}} onClick={()=>{setStatsPlayer(g);setView("stats");setStatsTab("player")}}>
+                    <div key={s.gId} className="lb-row" style={{gridTemplateColumns:"36px 1fr minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(44px,60px)",cursor:"pointer"}} onClick={()=>{setStatsPlayer(g);setView("stats");setStatsTab("player")}}>
                       <div style={{width:26,height:26,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,background:s.pos===1?"var(--gold-pale)":s.pos===2?"#E2E8F0":s.pos===3?"#FEE2CC":"var(--cream-2)",color:s.pos<=3?["#7A5C00","#475569","#9A3412"][s.pos-1]:"var(--muted)"}}>{s.pos}</div>
                       <div>
                         <p style={{fontWeight:600,fontSize:14}}>{g.country} {g.name}</p>
@@ -5280,7 +5339,7 @@ export default function GolfPoolPro() {
                   {/* Mini leaderboard */}
                   <h4 className="h4" style={{marginBottom:10}}>Live Leaderboard</h4>
                   <div className="card" style={{padding:0,overflow:"hidden",marginBottom:16}}>
-                    <div className="lb-row lb-hdr" style={{gridTemplateColumns:"36px 1fr 50px 50px 50px 50px 60px"}}>
+                    <div className="lb-row lb-hdr" style={{gridTemplateColumns:"36px 1fr minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(44px,60px)"}}>
                       <span>Pos</span><span>Player</span><span style={{textAlign:"right"}}>R1</span><span style={{textAlign:"right"}}>R2</span><span style={{textAlign:"right"}}>R3</span><span style={{textAlign:"right"}}>R4</span><span style={{textAlign:"right"}}>Total</span>
                     </div>
                     {liveScores.map(s=>{
@@ -5288,7 +5347,7 @@ export default function GolfPoolPro() {
                       if(!g) return null;
                       const tot=s.R1+s.R2+s.R3+s.R4;
                       return (
-                        <div key={s.gId} className="lb-row" style={{gridTemplateColumns:"36px 1fr 50px 50px 50px 50px 60px"}}>
+                        <div key={s.gId} className="lb-row" style={{gridTemplateColumns:"36px 1fr minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(44px,60px)"}}>
                           <div style={{width:26,height:26,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,background:s.pos<=3?"var(--gold-pale)":"var(--cream-2)",color:s.pos<=3?"#7A5C00":"var(--muted)"}}>{s.pos}</div>
                           <div><p style={{fontWeight:600,fontSize:14}}>{g.country} {g.name}</p></div>
                           {[s.R1,s.R2,s.R3,s.R4].map((v,i)=><div key={i} style={{textAlign:"right"}}>{fmtScore(v)}</div>)}
@@ -5443,7 +5502,7 @@ export default function GolfPoolPro() {
             {/* PLAYERS */}
             {statsTab==="players" && (
               <div className="card" style={{padding:0,overflow:"hidden"}}>
-                <div className="lb-row lb-hdr" style={{gridTemplateColumns:"36px 1fr 60px 60px 60px 60px 70px"}}>
+                <div className="lb-row lb-hdr" style={{gridTemplateColumns:"36px 1fr minmax(40px,60px) minmax(40px,60px) minmax(40px,60px) minmax(40px,60px) minmax(48px,70px)"}}>
                   <span>#</span><span>Player</span><span style={{textAlign:"right"}}>Avg</span><span style={{textAlign:"right"}}>Drive</span><span style={{textAlign:"right"}}>GIR%</span><span style={{textAlign:"right"}}>SG</span><span style={{textAlign:"right"}}>Total</span>
                 </div>
                 {liveScores.map(s=>{
@@ -5451,7 +5510,7 @@ export default function GolfPoolPro() {
                   if(!g) return null;
                   const tot=s.R1+s.R2+s.R3+s.R4;
                   return (
-                    <div key={s.gId} className="lb-row" style={{gridTemplateColumns:"36px 1fr 60px 60px 60px 60px 70px",cursor:"pointer"}} onClick={()=>{setStatsPlayer(g);setStatsTab("player")}}>
+                    <div key={s.gId} className="lb-row" style={{gridTemplateColumns:"36px 1fr minmax(40px,60px) minmax(40px,60px) minmax(40px,60px) minmax(40px,60px) minmax(48px,70px)",cursor:"pointer"}} onClick={()=>{setStatsPlayer(g);setStatsTab("player")}}>
                       <div style={{width:26,height:26,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,background:"var(--cream-2)",color:"var(--muted)"}}>{g.rank}</div>
                       <div>
                         <p style={{fontWeight:600,fontSize:14}}>{g.country} {g.name}</p>

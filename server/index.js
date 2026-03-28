@@ -87,9 +87,15 @@ app.use("/api/admin", rateLimit({
   max: 10,
   message: { error: "Admin rate limit exceeded. Slow down." }
 }));
+// Draft routes get a much higher limit to avoid blocking picks
+app.use("/api/draft", rateLimit({
+  windowMs: 60 * 1000,
+  max: 600,
+  message: { error: "Rate limit exceeded. Slow down." }
+}));
 app.use("/api", rateLimit({
   windowMs: 60 * 1000,
-  max: 120,
+  max: 200,
   message: { error: "Rate limit exceeded. Slow down." }
 }));
 
