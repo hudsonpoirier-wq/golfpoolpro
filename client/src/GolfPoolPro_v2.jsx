@@ -193,6 +193,111 @@ select.inp{cursor:pointer}
 @keyframes slideR{from{opacity:0;transform:translateX(-6px)}to{opacity:1;transform:translateX(0)}}
 .slide-r{animation:slideR .2s ease both}
 
+/* ═══ ENHANCED ANIMATIONS ═══ */
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes scaleIn{from{opacity:0;transform:scale(.92)}to{opacity:1;transform:scale(1)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes countUp{from{opacity:0;transform:translateY(8px) scale(.9)}to{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes popIn{0%{opacity:0;transform:scale(.6)}60%{transform:scale(1.05)}100%{opacity:1;transform:scale(1)}}
+@keyframes glowPulse{0%,100%{box-shadow:0 0 0 0 rgba(200,169,79,0)}50%{box-shadow:0 0 18px 4px rgba(200,169,79,.15)}}
+
+/* Cards animate in on mount */
+.card{animation:slideUp .35s ease both}
+.g2 .card:nth-child(2){animation-delay:.06s}
+.g2 .card:nth-child(3){animation-delay:.12s}
+.g2 .card:nth-child(4){animation-delay:.18s}
+.g3 > *:nth-child(2){animation-delay:.06s}
+.g3 > *:nth-child(3){animation-delay:.12s}
+
+/* Pool cards stagger in */
+.pool-card{animation:slideUp .35s ease both}
+.pool-card:nth-child(1){animation-delay:.04s}
+.pool-card:nth-child(2){animation-delay:.1s}
+.pool-card:nth-child(3){animation-delay:.16s}
+.pool-card:nth-child(4){animation-delay:.22s}
+
+/* Leaderboard rows stagger with fade */
+.lb-row:not(.lb-hdr){animation:fadeIn .25s ease both}
+.lb-row:nth-child(2){animation-delay:.02s}
+.lb-row:nth-child(3){animation-delay:.04s}
+.lb-row:nth-child(4){animation-delay:.06s}
+.lb-row:nth-child(5){animation-delay:.08s}
+.lb-row:nth-child(6){animation-delay:.1s}
+.lb-row:nth-child(7){animation-delay:.12s}
+.lb-row:nth-child(8){animation-delay:.14s}
+
+/* Stat numbers pop in */
+.stat-pill{animation:countUp .4s ease both}
+.stat-pill:nth-child(2){animation-delay:.08s}
+.stat-pill:nth-child(3){animation-delay:.16s}
+
+/* Tabs slide in */
+.tabs{animation:fadeIn .25s ease both}
+.tab{transition:all .2s cubic-bezier(.25,.1,.25,1)}
+.tab.on{transform:translateY(-1px)}
+
+/* Hero badge floats in */
+.hero-badge{animation:slideDown .5s ease both;animation-delay:.1s}
+.hero-title{animation:fadeUp .6s ease both;animation-delay:.2s}
+.hero-sub{animation:fadeUp .6s ease both;animation-delay:.35s}
+.hero .btn{animation:fadeUp .5s ease both;animation-delay:.5s}
+
+/* Phase banner entrance */
+.phase-banner{animation:scaleIn .4s ease both}
+
+/* Ready cards pop */
+.ready-card{animation:scaleIn .3s ease both}
+.ready-card:nth-child(2){animation-delay:.06s}
+.ready-card:nth-child(3){animation-delay:.12s}
+.ready-card:nth-child(4){animation-delay:.18s}
+.ready-card.is-ready{animation:popIn .35s ease both}
+
+/* Draft pick row hover lift */
+.pick-row{transition:all .2s cubic-bezier(.25,.1,.25,1)}
+.pick-row:hover:not(.drafted):not(.disabled){transform:translateX(3px) translateY(-1px)}
+
+/* Order row active glow */
+.order-row.cur{animation:glowPulse 2.5s ease infinite}
+
+/* Badge pop in */
+.badge{animation:popIn .3s ease both}
+
+/* Button hover micro-interactions */
+.btn{transition:all .2s cubic-bezier(.25,.1,.25,1)}
+.btn-prim:hover,.btn-gold:hover{transform:translateY(-2px);box-shadow:var(--sh-md)}
+.btn-prim:active,.btn-gold:active{transform:translateY(0);transition-duration:.08s}
+
+/* Smooth page transitions */
+.page,.page-wide{animation:fadeIn .3s ease both}
+
+/* Progress bar shimmer effect */
+.prog-fill{background:linear-gradient(90deg,var(--forest-pale),var(--forest-mid),var(--forest-pale));background-size:200% 100%;animation:shimmer 2.5s linear infinite}
+
+/* Portal card entrance */
+.portal-card{animation:scaleIn .4s ease both;animation-delay:.15s}
+
+/* Tourney expand smooth */
+.tourney-expand-body{animation:slideUp .25s ease both}
+
+/* Number transitions for scores */
+.under,.over,.even{transition:color .3s ease}
+
+/* Nav slide down on load */
+.nav{animation:slideDown .3s ease both}
+
+/* Update bar pulse */
+.update-bar{animation:fadeIn .4s ease both}
+
+/* Smooth hover for interactive elements */
+.pool-card,.ready-card,.pick-row,.lb-row:not(.lb-hdr),.order-row{will-change:transform}
+
+/* Reduced motion for accessibility */
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}
+
 /* SEARCH */
 .search-wrap{position:relative;margin-bottom:10px}
 .search-wrap svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);pointer-events:none}
