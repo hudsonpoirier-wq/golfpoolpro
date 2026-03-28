@@ -4337,14 +4337,14 @@ export default function GolfPoolPro() {
                                   if(chartCountingOnly && teamScores.length > sc){
                                     teamScores=[...teamScores].sort((a,b)=>a-b).slice(0,sc);
                                   }
-                                  const teamSum=teamScores.reduce((a,b)=>a+b,0);
+                                  const teamAvg=teamScores.length?Math.round((teamScores.reduce((a,b)=>a+b,0)/teamScores.length)*10)/10:0;
                                   let fieldSum=0, fieldCount=0;
                                   liveScores.forEach(s=>{
                                     if(s[r]!==null&&s[r]!==undefined){fieldSum+=s[r];fieldCount++;}
                                   });
                                   const fieldAvg=fieldCount?Math.round((fieldSum/fieldCount)*10)/10:0;
-                                  cumTeam+=teamSum; cumField+=fieldAvg;
-                                  areaData.push({round:r,team:cumTeam,field:cumField});
+                                  cumTeam+=teamAvg; cumField+=fieldAvg;
+                                  areaData.push({round:r,team:Math.round(cumTeam*10)/10,field:Math.round(cumField*10)/10});
                                 }
                                 if(!areaData.some(d=>d.team!==0)) return null;
                                 return (
@@ -4356,7 +4356,7 @@ export default function GolfPoolPro() {
                                         <button onClick={()=>setChartCountingOnly(true)} style={{padding:"4px 12px",fontSize:11,fontWeight:700,border:"none",cursor:"pointer",background:chartCountingOnly?"var(--forest)":"transparent",color:chartCountingOnly?"#fff":"var(--muted)",transition:"all .2s"}}>Best {sc}</button>
                                       </div>
                                     </div>
-                                    <p className="sub" style={{marginBottom:16}}>{chartCountingOnly?`Best ${sc} golfers'`:"Your team's"} total vs field average over rounds</p>
+                                    <p className="sub" style={{marginBottom:16}}>{chartCountingOnly?`Best ${sc} golfers'`:"Your team's"} cumulative average vs field average over rounds</p>
                                     <ResponsiveContainer width="100%" height={220}>
                                       <AreaChart data={areaData} margin={{top:10,right:10,bottom:0,left:0}}>
                                         <defs>
