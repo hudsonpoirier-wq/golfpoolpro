@@ -676,9 +676,26 @@ const sumRounds = (ls) => {
  * Uses softmax on score gaps with confidence scaling by rounds played.
  * Returns [{r:"Start",...},{r:"R1",...},...] with participant first-name keys → probability %.
  */
-const calcWinProb = (participants, getTeamFn, liveScoresList, scoringCount) => {
+const calcWinProb = (participants, getTeamFn, liveScoresList, scoringCount, cutLine) => {
   const roundKeys = ["R1","R2","R3","R4"];
   const names = participants.map(p => p.name.split(" ")[0]);
+  const CUT_POSITIONS = new Set(["CUT","WD","DQ","MDF"]);
+
+  // Pre-compute team info for each participant
+  const teamInfo = participants.map(p => {
+    const team = getTeamFn(p.id);
+    const golfers = team.map(g => {
+      const ls = liveScoresList.find(l => l.gId === g.id);
+      const isCut = ls ? CUT_POSITIONS.has(String(ls.pos || "").toUpperCase()) : false;
+      const posNum = ls?.pos ? parseInt(String(ls.pos).replace(/[^0-9]/g, ''), 10) : null;
+      return { g, ls, isCut, posNum: isNaN(posNum) ? null : posNum };
+    });
+    const activeCount = golfers.filter(gf => !gf.isCut).length;
+    const eliminated = cutLine ? activeCount < cutLine : false;
+    // Cut risk: team is close to elimination (exactly at cutLine threshold)
+    const atCutRisk = cutLine ? activeCount === cutLine : false;
+    return { team, golfers, activeCount, eliminated, atCutRisk };
+  });
 
   // Determine how many rounds have actual data
   const maxRound = roundKeys.reduce((mx, rk) => {
@@ -693,15 +710,14 @@ const calcWinProb = (participants, getTeamFn, liveScoresList, scoringCount) => {
   // For each round played so far, compute cumulative scores and softmax probability
   for (let ri = 0; ri < 4; ri++) {
     if (ri >= maxRound) break;
-    // Confidence grows each round: alpha controls how much score gap matters
+    // Confidence grows each round
     const alpha = 0.15 + ri * 0.12; // R1=0.15, R2=0.27, R3=0.39, R4=0.51
 
     const cumScores = participants.map((p, pi) => {
-      const team = getTeamFn(p.id);
-      const golferCumScores = team.map(g => {
-        const ls = liveScoresList.find(l => l.gId === g.id);
-        if (!ls) return null;
-        const rds = roundKeys.slice(0, ri + 1).map(rk => ls[rk]).filter(v => typeof v === "number");
+      if (teamInfo[pi].eliminated) return null;
+      const golferCumScores = teamInfo[pi].golfers.map(gf => {
+        if (!gf.ls || gf.isCut) return null;
+        const rds = roundKeys.slice(0, ri + 1).map(rk => gf.ls[rk]).filter(v => typeof v === "number");
         return rds.length > 0 ? rds.reduce((a, b) => a + b, 0) : null;
       }).filter(v => v !== null).sort((a, b) => a - b);
 
@@ -709,17 +725,58 @@ const calcWinProb = (participants, getTeamFn, liveScoresList, scoringCount) => {
       return best.length > 0 ? best.reduce((a, b) => a + b, 0) : null;
     });
 
+    // Momentum factor: how the team's scoring golfers performed in the most recent round
+    // Positive momentum (low recent round) = bonus, negative momentum (high recent round) = penalty
+    const momentumFactors = participants.map((p, pi) => {
+      if (teamInfo[pi].eliminated) return 0;
+      const recentRound = roundKeys[ri];
+      const recentScores = teamInfo[pi].golfers
+        .filter(gf => gf.ls && !gf.isCut && typeof gf.ls[recentRound] === "number")
+        .map(gf => gf.ls[recentRound])
+        .sort((a, b) => a - b)
+        .slice(0, scoringCount);
+      if (!recentScores.length) return 0;
+      const avg = recentScores.reduce((a, b) => a + b, 0) / recentScores.length;
+      // Momentum scales with round progression (matters more later)
+      return -avg * (0.03 + ri * 0.02); // negative score = positive momentum boost
+    });
+
+    // Position bonus: teams with golfers in top positions get a boost
+    const positionFactors = participants.map((p, pi) => {
+      if (teamInfo[pi].eliminated) return 0;
+      const positions = teamInfo[pi].golfers
+        .filter(gf => !gf.isCut && gf.posNum !== null)
+        .map(gf => gf.posNum)
+        .sort((a, b) => a - b)
+        .slice(0, scoringCount);
+      if (!positions.length) return 0;
+      const avgPos = positions.reduce((a, b) => a + b, 0) / positions.length;
+      // Higher bonus for lower positions; scale with round progression
+      return Math.max(0, (50 - avgPos) * 0.005 * (1 + ri * 0.3));
+    });
+
     const validScores = cumScores.filter(v => v !== null);
     if (validScores.length === 0) break;
 
     const minScore = Math.min(...validScores);
-    // Softmax: lower score = higher probability (golf: lower is better)
-    const exps = cumScores.map(s => s !== null ? Math.exp(-alpha * (s - minScore)) : 0.001);
+    // Combined softmax: score + momentum + position + cut risk penalty
+    const exps = cumScores.map((s, i) => {
+      if (teamInfo[i].eliminated) return 0;
+      if (s === null) return 0.001;
+      let logit = -alpha * (s - minScore); // base: score gap
+      logit += momentumFactors[i];          // hot/cold streak
+      logit += positionFactors[i];          // leaderboard position
+      if (teamInfo[i].atCutRisk) logit -= 0.3 * (1 + ri); // cut risk penalty (grows each round)
+      return Math.exp(logit);
+    });
     const total = exps.reduce((a, b) => a + b, 0);
-    const probs = exps.map(e => Math.round((e / total) * 100));
+    const probs = exps.map(e => total > 0 ? Math.round((e / total) * 100) : 0);
     // Adjust so they sum to 100
     const probSum = probs.reduce((a, b) => a + b, 0);
-    if (probSum > 0 && probSum !== 100) probs[0] += 100 - probSum;
+    if (probSum > 0 && probSum !== 100) {
+      const firstActive = probs.findIndex((_, i) => !teamInfo[i].eliminated);
+      if (firstActive >= 0) probs[firstActive] += 100 - probSum;
+    }
 
     rows.push({ r: roundKeys[ri], ...Object.fromEntries(names.map((n, i) => [n, probs[i]])) });
   }
@@ -3798,7 +3855,7 @@ export default function GolfPoolPro() {
                 })()}
 
                 {poolTab==="prob" && (()=>{
-                  const wp=calcWinProb(poolStandings,getPoolTeam,liveScores,sc);
+                  const wp=calcWinProb(poolStandings,getPoolTeam,liveScores,sc,activePool?.cutLine||2);
                   return (
                   <div className="card">
                     <h3 className="h3" style={{marginBottom:4}}>Win Probability</h3>
@@ -5271,7 +5328,7 @@ export default function GolfPoolPro() {
             )}
 
             {analyticsTab==="prob" && (()=>{
-              const wp=calcWinProb(standings,getTeam,liveScores,scoringGolfers);
+              const wp=calcWinProb(standings,getTeam,liveScores,scoringGolfers,config.cutLine||2);
               return (
               <div className="card">
                 <h3 className="h3" style={{marginBottom:4}}>Win Probability Tracker</h3>
@@ -5377,7 +5434,7 @@ export default function GolfPoolPro() {
 
                   {/* Win probability mini chart */}
                   {(()=>{
-                    const wp=calcWinProb(standings,getTeam,liveScores,scoringGolfers);
+                    const wp=calcWinProb(standings,getTeam,liveScores,scoringGolfers,config.cutLine||2);
                     return (<>
                   <h4 className="h4" style={{marginTop:16,marginBottom:10}}>Win Probability</h4>
                   <ResponsiveContainer width="100%" height={200}>
