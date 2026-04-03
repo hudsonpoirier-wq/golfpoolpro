@@ -20,35 +20,54 @@ router.get("/", optionalAuth, async (req, res, next) => {
         .eq("tournament_id", tournament);
       let ids = (scoredIds || []).map((s) => s.golfer_id).filter(Boolean);
 
-      // If the tournament is upcoming, we may not have any score rows yet.
-      // Try to auto-seed a projected field once in a while using DataGolf (if configured).
-      if (!ids.length) {
+      // Auto-seed or refresh the projected field from DataGolf:
+      // - Always attempt when the field is empty (first load)
+      // - Also refresh when the tournament starts within 7 days (picks up withdrawals/additions)
+      // Rate-limited to once per 10 minutes per tournament.
+      {
         const now = Date.now();
         const prev = FIELD_SEED_ATTEMPTS.get(String(tournament)) || null;
         const shouldAttempt = !prev || (now - prev.ts) >= FIELD_SEED_MIN_INTERVAL_MS;
         if (shouldAttempt) {
-          FIELD_SEED_ATTEMPTS.set(String(tournament), { ts: now });
-          try {
-            const { data: tRow } = await sb
-              .from("tournaments")
-              .select("id, name, start_date, field_size")
-              .eq("id", tournament)
-              .single();
-
-            const fetchDataGolfFieldPlayers = req.app.locals.fetchDataGolfFieldPlayers;
-            const importFieldPlayersIntoTournament = req.app.locals.importFieldPlayersIntoTournament;
-            if (tRow && typeof fetchDataGolfFieldPlayers === "function" && typeof importFieldPlayersIntoTournament === "function") {
-              const dg = await fetchDataGolfFieldPlayers(tRow);
-              if (dg?.players?.length) {
-                await importFieldPlayersIntoTournament(String(tournament), dg.players);
-                const { data: scoredIds2 } = await sb
-                  .from("tournament_scores")
-                  .select("golfer_id")
-                  .eq("tournament_id", tournament);
-                ids = (scoredIds2 || []).map((s) => s.golfer_id).filter(Boolean);
+          let shouldRefresh = !ids.length; // always seed if empty
+          if (!shouldRefresh && ids.length) {
+            // Also refresh if tournament is imminent (within 7 days) to catch field changes
+            try {
+              const { data: tCheck } = await sb
+                .from("tournaments")
+                .select("start_date")
+                .eq("id", tournament)
+                .single();
+              if (tCheck?.start_date) {
+                const daysUntil = (new Date(tCheck.start_date) - new Date()) / (1000 * 60 * 60 * 24);
+                if (daysUntil <= 7 && daysUntil >= -1) shouldRefresh = true;
               }
-            }
-          } catch {}
+            } catch {}
+          }
+          if (shouldRefresh) {
+            FIELD_SEED_ATTEMPTS.set(String(tournament), { ts: now });
+            try {
+              const { data: tRow } = await sb
+                .from("tournaments")
+                .select("id, name, start_date, field_size")
+                .eq("id", tournament)
+                .single();
+
+              const fetchDataGolfFieldPlayers = req.app.locals.fetchDataGolfFieldPlayers;
+              const importFieldPlayersIntoTournament = req.app.locals.importFieldPlayersIntoTournament;
+              if (tRow && typeof fetchDataGolfFieldPlayers === "function" && typeof importFieldPlayersIntoTournament === "function") {
+                const dg = await fetchDataGolfFieldPlayers(tRow);
+                if (dg?.players?.length) {
+                  await importFieldPlayersIntoTournament(String(tournament), dg.players);
+                  const { data: scoredIds2 } = await sb
+                    .from("tournament_scores")
+                    .select("golfer_id")
+                    .eq("tournament_id", tournament);
+                  ids = (scoredIds2 || []).map((s) => s.golfer_id).filter(Boolean);
+                }
+              }
+            } catch {}
+          }
         }
       }
 

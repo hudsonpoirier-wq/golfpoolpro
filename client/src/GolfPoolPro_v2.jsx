@@ -23,13 +23,13 @@ const CSS = `
   --sh-lg:0 16px 48px rgba(27,67,50,.13),0 4px 12px rgba(27,67,50,.05);
   --r:16px;--r-sm:10px;
 }
-html,body{background:var(--cream);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh}
+html,body{background:var(--cream);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;-webkit-text-size-adjust:100%}
 ::-webkit-scrollbar{width:5px;height:5px}
 ::-webkit-scrollbar-track{background:var(--cream-2)}
 ::-webkit-scrollbar-thumb{background:var(--parchment);border-radius:3px}
 
 /* NAV */
-.nav{background:var(--forest);height:60px;display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:300;box-shadow:0 2px 20px rgba(0,0,0,.2)}
+.nav{background:var(--forest);height:60px;display:flex;align-items:center;justify-content:space-between;padding:0 max(24px,env(safe-area-inset-left)) 0 max(24px,env(safe-area-inset-right));padding-top:env(safe-area-inset-top);position:sticky;top:0;z-index:300;box-shadow:0 2px 20px rgba(0,0,0,.2)}
 .logo{font-family:'Cormorant Garamond',serif;font-size:20px;font-weight:700;color:var(--gold);cursor:pointer;letter-spacing:.2px}
 .logo em{color:#fff;font-style:normal}
 .nav-home-btn{display:inline-flex;align-items:center;justify-content:center;padding:7px 14px;border-radius:9px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:#ecf4ee;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:700;cursor:pointer;transition:all .16s}
@@ -305,12 +305,12 @@ select.inp{cursor:pointer}
 
 /* ═══ MOBILE RESPONSIVE ═══ */
 @media(max-width:768px){
-  .nav{padding:0 12px;height:52px}
-  .nav-home-btn{padding:5px 10px;font-size:11px}
-  .nav-user{padding:4px 8px}
+  .nav{padding:0 12px;padding-left:max(12px,env(safe-area-inset-left));padding-right:max(12px,env(safe-area-inset-right));height:52px}
+  .nav-home-btn{padding:8px 14px;font-size:12px;min-height:36px}
+  .nav-user{padding:6px 10px;min-height:36px}
   .nav-user span{font-size:11px}
-  .page{padding:16px 12px}
-  .page-wide{padding:14px 10px}
+  .page{padding:16px 12px;padding-left:max(12px,env(safe-area-inset-left));padding-right:max(12px,env(safe-area-inset-right))}
+  .page-wide{padding:14px 10px;padding-left:max(10px,env(safe-area-inset-left));padding-right:max(10px,env(safe-area-inset-right))}
   .hero{padding:48px 16px}
   .hero-title{font-size:32px}
   .hero-sub{font-size:13px;margin-bottom:20px}
@@ -318,39 +318,45 @@ select.inp{cursor:pointer}
   .h1{font-size:28px}
   .h2{font-size:22px}
   .h3{font-size:17px}
-  .sub{font-size:12px}
+  .sub{font-size:13px}
+  .label{font-size:12px}
   .g2,.g3,.g4{grid-template-columns:1fr;gap:12px}
   .card{padding:14px;border-radius:12px}
   .card-sm{padding:10px}
   .tabs{flex-wrap:wrap;gap:2px}
-  .tab{padding:6px 8px;font-size:11px;flex:unset}
+  .tab{padding:8px 10px;font-size:12px;flex:unset;min-height:36px}
   .pool-card{padding:14px}
-  .btn{padding:8px 14px;font-size:12px}
-  .btn-sm{padding:5px 10px;font-size:11px}
+  .btn{padding:10px 16px;font-size:13px;min-height:40px}
+  .btn-sm{padding:8px 12px;font-size:12px;min-height:34px}
+  .btn-link{min-height:34px;display:inline-flex;align-items:center}
+  .ntab{padding:8px 12px;font-size:12px;min-height:36px}
   .phase-banner{padding:16px 14px;border-radius:12px}
   .phase-banner::after{font-size:32px;right:10px}
   .ready-grid{grid-template-columns:1fr;gap:8px}
-  .ready-card{padding:10px 12px}
+  .ready-card{padding:12px 14px;min-height:48px}
   .link-box{flex-direction:column;align-items:stretch;gap:6px}
-  .link-txt{max-width:100%}
-  .portal-wrap{padding:16px 10px}
+  .link-txt{max-width:100%;font-size:13px}
+  .portal-wrap{padding:16px 10px;padding-bottom:max(16px,env(safe-area-inset-bottom))}
   .portal-card{padding:24px 18px;border-radius:16px}
   .stat-pill{padding:8px 10px}
   .stat-pill-n{font-size:22px}
-  .lb-row{padding:8px 10px;font-size:12px;gap:4px}
-  .lb-hdr{font-size:9px;padding:6px 10px}
-  .pick-row{padding:7px 8px;gap:6px}
+  .stat-pill-l{font-size:12px}
+  .lb-row{padding:10px 10px;font-size:12px;gap:4px;min-height:44px}
+  .lb-hdr{font-size:10px;padding:8px 10px;min-height:32px}
+  .pick-row{padding:10px 10px;gap:6px;min-height:44px}
   .draft-layout{grid-template-columns:1fr;height:auto;min-height:auto;gap:10px}
   .draft-panel{border-radius:10px}
   .panel-hdr{padding:10px 12px}
   .clock-wrap{padding:12px}
-  .order-row{padding:5px 8px}
-  .tourney-expand-hdr{padding:10px 12px}
+  .order-row{padding:7px 10px;min-height:36px}
+  .tourney-expand-hdr{padding:12px 14px;min-height:44px}
   .tourney-expand-body{padding:12px}
-  .auth-tab{font-size:13px;padding:8px}
-  .update-bar{padding:6px 10px;font-size:11px}
-  .search-inp{font-size:14px!important}
-  .inp{font-size:14px;padding:9px 11px}
+  .auth-tab{font-size:13px;padding:10px;min-height:44px}
+  .update-bar{padding:8px 12px;font-size:12px}
+  .search-wrap{min-width:0!important}
+  .search-inp{font-size:16px!important}
+  .inp{font-size:16px;padding:10px 12px}
+  .badge{font-size:11px;padding:4px 10px}
 }
 @media(max-width:480px){
   .hero-title{font-size:26px}
@@ -359,7 +365,7 @@ select.inp{cursor:pointer}
   .h2{font-size:19px}
   .portal-card{padding:20px 14px}
   .tabs{border-radius:7px;padding:2px}
-  .tab{padding:5px 6px;font-size:10px}
+  .tab{padding:7px 8px;font-size:11px;min-height:34px}
 }
 `;
 
@@ -2652,7 +2658,7 @@ export default function GolfPoolPro() {
     <>
       <style>{CSS}</style>
       {notification && (
-        <div style={{position:"fixed",bottom:24,left:12,right:12,maxWidth:400,marginLeft:"auto",zIndex:9999,background:notification.type==="success"?"var(--forest)":"var(--red)",color:"#fff",padding:"12px 20px",borderRadius:10,fontSize:14,fontWeight:600,boxShadow:"var(--sh-md)",animation:"fadeUp .25s ease"}}>
+        <div style={{position:"fixed",bottom:"max(24px, env(safe-area-inset-bottom))",left:12,right:12,maxWidth:400,marginLeft:"auto",zIndex:9999,background:notification.type==="success"?"var(--forest)":"var(--red)",color:"#fff",padding:"14px 20px",borderRadius:10,fontSize:14,fontWeight:600,boxShadow:"var(--sh-md)",animation:"fadeUp .25s ease"}}>
           {notification.msg}
         </div>
       )}
@@ -2688,7 +2694,7 @@ export default function GolfPoolPro() {
                 <span>{effectiveUserId ? (getEffectiveUserName()||"Account").split(" ")[0] : "Guest"}</span>
               </button>
               {showUserMenu && (
-                <div style={{position:"absolute",top:42,right:0,minWidth:170,background:"#133526",border:"1px solid rgba(255,255,255,.12)",borderRadius:12,boxShadow:"0 12px 28px rgba(0,0,0,.35)",overflow:"hidden",zIndex:450}}>
+                <div style={{position:"absolute",top:42,right:0,minWidth:160,background:"#133526",border:"1px solid rgba(255,255,255,.12)",borderRadius:12,boxShadow:"0 12px 28px rgba(0,0,0,.35)",overflow:"hidden",zIndex:450}}>
                   <button
                     type="button"
                     onClick={()=>{
@@ -2698,14 +2704,14 @@ export default function GolfPoolPro() {
                       setNewPassword("");
                       setConfirmPassword("");
                     }}
-                    style={{display:"block",width:"100%",textAlign:"left",padding:"11px 12px",background:"transparent",border:"none",color:"rgba(255,255,255,.88)",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}
+                    style={{display:"block",width:"100%",textAlign:"left",padding:"14px 16px",background:"transparent",border:"none",color:"rgba(255,255,255,.88)",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}
                   >
                     Settings
                   </button>
                   <button
                     type="button"
                     onClick={()=>{ setShowUserMenu(false); handleLogout(); }}
-                    style={{display:"block",width:"100%",textAlign:"left",padding:"11px 12px",background:"transparent",border:"none",color:"#FCA5A5",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",borderTop:"1px solid rgba(255,255,255,.08)"}}
+                    style={{display:"block",width:"100%",textAlign:"left",padding:"14px 16px",background:"transparent",border:"none",color:"#FCA5A5",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",borderTop:"1px solid rgba(255,255,255,.08)"}}
                   >
                     Log out
                   </button>
@@ -2718,7 +2724,7 @@ export default function GolfPoolPro() {
             const user = participants.find(p=>p.id===getEffectiveUserId()) || {name:getEffectiveUserName(),avatar:getEffectiveUserAvatar(),email:getEffectiveUserEmail()};
             const account = accounts.find(a=>a.id===currentUser) || {email:getEffectiveUserEmail()};
             return (
-              <div style={{position:"fixed",top:56,right:8,left:8,zIndex:400,maxWidth:340,marginLeft:"auto",background:"#fff",borderRadius:16,boxShadow:"0 16px 48px rgba(27,67,50,.18),0 4px 12px rgba(27,67,50,.08)",border:"1px solid rgba(27,67,50,.08)",overflow:"hidden"}}>
+              <div style={{position:"fixed",top:"calc(56px + env(safe-area-inset-top, 0px))",right:"max(8px, env(safe-area-inset-right, 0px))",left:"max(8px, env(safe-area-inset-left, 0px))",zIndex:400,maxWidth:380,marginLeft:"auto",background:"#fff",borderRadius:16,boxShadow:"0 16px 48px rgba(27,67,50,.18),0 4px 12px rgba(27,67,50,.08)",border:"1px solid rgba(27,67,50,.08)",overflow:"hidden"}}>
                 <div style={{background:"var(--forest)",padding:"18px 20px",display:"flex",alignItems:"center",gap:12}}>
                   <Avatar init={user?.avatar||"AD"} size={40} color="var(--gold)"/>
                   <div>
@@ -2731,15 +2737,15 @@ export default function GolfPoolPro() {
                   <p style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:".8px",color:"var(--forest-mid)",marginBottom:12}}>Account Details</p>
                   <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:20}}>
                     <div style={{background:"var(--cream)",borderRadius:9,padding:"10px 14px"}}>
-                      <p style={{fontSize:10,color:"var(--muted)",fontWeight:600,textTransform:"uppercase",letterSpacing:".6px",marginBottom:3}}>Username</p>
+                      <p style={{fontSize:11,color:"var(--muted)",fontWeight:600,textTransform:"uppercase",letterSpacing:".6px",marginBottom:3}}>Username</p>
                       <p style={{fontSize:14,fontWeight:600,color:"var(--text)"}}>{user?.name||"Admin"}</p>
                     </div>
                     <div style={{background:"var(--cream)",borderRadius:9,padding:"10px 14px"}}>
-                      <p style={{fontSize:10,color:"var(--muted)",fontWeight:600,textTransform:"uppercase",letterSpacing:".6px",marginBottom:3}}>Email</p>
+                      <p style={{fontSize:11,color:"var(--muted)",fontWeight:600,textTransform:"uppercase",letterSpacing:".6px",marginBottom:3}}>Email</p>
                       <p style={{fontSize:14,fontWeight:600,color:"var(--text)"}}>{account?.email||"admin@example.com"}</p>
                     </div>
                     <div style={{background:"var(--cream)",borderRadius:9,padding:"10px 14px"}}>
-                      <p style={{fontSize:10,color:"var(--muted)",fontWeight:600,textTransform:"uppercase",letterSpacing:".6px",marginBottom:3}}>Password</p>
+                      <p style={{fontSize:11,color:"var(--muted)",fontWeight:600,textTransform:"uppercase",letterSpacing:".6px",marginBottom:3}}>Password</p>
                       <p style={{fontSize:14,fontWeight:600,color:"var(--text)",letterSpacing:"3px"}}>••••••••</p>
                     </div>
                   </div>
@@ -2747,10 +2753,10 @@ export default function GolfPoolPro() {
                   <div style={{display:"flex",flexDirection:"column",gap:8}}>
                     <input className="inp" type="password" placeholder="New password"
                       value={newPassword} onChange={e=>{setNewPassword(e.target.value);setPasswordMsg("");}}
-                      style={{fontSize:13,padding:"9px 12px"}}/>
+                      style={{padding:"10px 12px"}}/>
                     <input className="inp" type="password" placeholder="Confirm new password"
                       value={confirmPassword} onChange={e=>{setConfirmPassword(e.target.value);setPasswordMsg("");}}
-                      style={{fontSize:13,padding:"9px 12px"}}/>
+                      style={{padding:"10px 12px"}}/>
                     {passwordMsg&&<p style={{fontSize:12,color:passwordMsg.includes("✓")?"var(--green)":"var(--red)",fontWeight:600}}>{passwordMsg}</p>}
                     <button className="btn btn-prim" style={{width:"100%",justifyContent:"center",fontSize:13,padding:"9px"}}
                       onClick={async()=>{
@@ -2809,18 +2815,18 @@ export default function GolfPoolPro() {
                 {!adminData.users ? (
                   <div style={{padding:32,textAlign:"center",color:"#888"}}>Loading...</div>
                 ) : (
-                  <div style={{overflowX:"auto"}}>
-                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                  <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,minWidth:600}}>
                       <thead>
                         <tr style={{background:"rgba(27,67,50,.04)",textAlign:"left"}}>
-                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)"}}>Name</th>
-                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)"}}>Email</th>
-                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Pools</th>
-                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Hosted</th>
-                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Picks</th>
-                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)"}}>Joined</th>
-                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Role</th>
-                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Actions</th>
+                          <th style={{padding:"10px 12px",fontWeight:600,color:"var(--forest)"}}>Name</th>
+                          <th style={{padding:"10px 12px",fontWeight:600,color:"var(--forest)"}}>Email</th>
+                          <th style={{padding:"10px 12px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Pools</th>
+                          <th style={{padding:"10px 12px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Hosted</th>
+                          <th style={{padding:"10px 12px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Picks</th>
+                          <th style={{padding:"10px 12px",fontWeight:600,color:"var(--forest)"}}>Joined</th>
+                          <th style={{padding:"10px 12px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Role</th>
+                          <th style={{padding:"10px 12px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Actions</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2834,7 +2840,7 @@ export default function GolfPoolPro() {
                             <td style={{padding:"10px 14px",fontSize:12,color:"#888"}}>{u.created_at ? new Date(u.created_at).toLocaleDateString() : "—"}</td>
                             <td style={{padding:"10px 14px",textAlign:"center"}}>
                               {u.is_admin ? (
-                                <span style={{background:"#FFD700",color:"#1B4332",padding:"2px 8px",borderRadius:6,fontSize:10,fontWeight:700,letterSpacing:".5px"}}>ADMIN</span>
+                                <span style={{background:"#FFD700",color:"#1B4332",padding:"3px 8px",borderRadius:6,fontSize:11,fontWeight:700,letterSpacing:".5px"}}>ADMIN</span>
                               ) : (
                                 <span style={{color:"#888",fontSize:11}}>User</span>
                               )}
@@ -2848,19 +2854,19 @@ export default function GolfPoolPro() {
                                     className="btn btn-sm"
                                     disabled={adminDeleteBusy===u.id}
                                     onClick={()=>handleAdminDeleteUser(u.id)}
-                                    style={{background:"#DC2626",color:"#fff",border:"none",fontSize:10,padding:"4px 10px",borderRadius:6}}
+                                    style={{background:"#DC2626",color:"#fff",border:"none",fontSize:11,padding:"6px 12px",borderRadius:6}}
                                   >{adminDeleteBusy===u.id ? "..." : "Confirm"}</button>
                                   <button
                                     className="btn btn-sm btn-ghost"
                                     onClick={()=>setAdminConfirmDelete(null)}
-                                    style={{fontSize:10,padding:"4px 8px",borderRadius:6}}
+                                    style={{fontSize:11,padding:"6px 10px",borderRadius:6}}
                                   >Cancel</button>
                                 </div>
                               ) : (
                                 <button
                                   className="btn btn-sm"
                                   onClick={()=>setAdminConfirmDelete(u.id)}
-                                  style={{background:"transparent",color:"#DC2626",border:"1px solid #DC2626",fontSize:10,padding:"4px 10px",borderRadius:6,cursor:"pointer"}}
+                                  style={{background:"transparent",color:"#DC2626",border:"1px solid #DC2626",fontSize:11,padding:"6px 12px",borderRadius:6,cursor:"pointer"}}
                                 >Delete</button>
                               )}
                             </td>
@@ -3024,16 +3030,16 @@ export default function GolfPoolPro() {
                 {!adminData.pools ? (
                   <div style={{padding:32,textAlign:"center",color:"#888"}}>Loading...</div>
                 ) : (
-                  <div style={{overflowX:"auto"}}>
-                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                  <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,minWidth:480}}>
                       <thead>
                         <tr style={{background:"rgba(27,67,50,.04)",textAlign:"left"}}>
-                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)"}}>Pool Name</th>
-                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)"}}>Host</th>
-                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Status</th>
-                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Members</th>
-                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Max</th>
-                          <th style={{padding:"10px 14px",fontWeight:600,color:"var(--forest)"}}>Created</th>
+                          <th style={{padding:"10px 12px",fontWeight:600,color:"var(--forest)"}}>Pool Name</th>
+                          <th style={{padding:"10px 12px",fontWeight:600,color:"var(--forest)"}}>Host</th>
+                          <th style={{padding:"10px 12px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Status</th>
+                          <th style={{padding:"10px 12px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Members</th>
+                          <th style={{padding:"10px 12px",fontWeight:600,color:"var(--forest)",textAlign:"center"}}>Max</th>
+                          <th style={{padding:"10px 12px",fontWeight:600,color:"var(--forest)"}}>Created</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -3918,7 +3924,7 @@ export default function GolfPoolPro() {
                         {/* Show each golfer with their live score */}
                         {teamScores.map(({g,tot,ls},gi)=>(
                           <div key={g.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"3px 0",opacity:gi<sc?1:0.45}}>
-                            <span style={{fontSize:11,color:"var(--muted)",maxWidth:90,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                            <span style={{fontSize:12,color:"var(--muted)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1,minWidth:0}}>
                               {gi<sc&&<span style={{color:"var(--gold)",marginRight:4}}>★</span>}
                               {g.name.split(" ").pop()}
                               {ls?.tee_time && <span style={{color:"var(--gold)",marginLeft:4,fontWeight:600}}>{ls.tee_time}</span>}
@@ -3954,8 +3960,8 @@ export default function GolfPoolPro() {
                           <div key={s.gId} className="lb-row" style={{gridTemplateColumns:"36px 1fr minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(44px,60px)",cursor:"pointer",background:isInPool?"rgba(27,67,50,.04)":"transparent"}}
                             onClick={()=>{setPoolStatsPlayer(g);setPoolTab("stats");setPoolStatsTab("player");}}>
                             <div style={{width:26,height:26,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,background:pos===1?"var(--gold-pale)":pos===2?"#E2E8F0":pos===3?"#FEE2CC":isInPool?"rgba(27,67,50,.08)":"var(--cream-2)",color:pos<=3?["#7A5C00","#475569","#9A3412"][pos-1]:isInPool?"var(--forest)":"var(--muted)"}}>{pos}</div>
-                            <div>
-                              <p style={{fontWeight:isInPool?700:600,fontSize:14}}>{g.country} {g.name}{isInPool&&<span style={{marginLeft:6,fontSize:10,background:"var(--gold-pale)",color:"#7A5C00",padding:"1px 5px",borderRadius:3,fontWeight:700}}>IN POOL</span>}</p>
+                            <div style={{minWidth:0}}>
+                              <p style={{fontWeight:isInPool?700:600,fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.country} {g.name}{isInPool&&<span style={{marginLeft:6,fontSize:10,background:"var(--gold-pale)",color:"#7A5C00",padding:"1px 5px",borderRadius:3,fontWeight:700}}>IN POOL</span>}</p>
                               <p style={{fontSize:11,color:"var(--muted)"}}>#{g.rank}{s.tee_time ? ` · Tee: ${s.tee_time}` : ""}</p>
                             </div>
                             {[s.R1,s.R2,s.R3,s.R4].map((v,i)=><div key={i} style={{textAlign:"right"}}>{fmtScore(v)}</div>)}
@@ -4688,7 +4694,7 @@ export default function GolfPoolPro() {
                       <div>
                         {/* Search / filter bar */}
                         <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:14,flexWrap:"wrap"}}>
-                          <div className="search-wrap" style={{flex:1,minWidth:200,margin:0}}>
+                          <div className="search-wrap" style={{flex:1,minWidth:0,margin:0}}>
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#78716C" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
                             <input className="inp search-inp" placeholder="Search players…"
                               value={search} onChange={e=>setSearch(e.target.value)}

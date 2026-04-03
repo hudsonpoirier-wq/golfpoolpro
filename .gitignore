@@ -11,3 +11,4 @@ server/.env
 imported/
 mnt/
 .DS_Store
+.vercel

@@ -765,6 +765,31 @@ function extractPlayersFromAnyJson(node) {
   return out;
 }
 
+// Load a hardcoded confirmed major field from server/data/ as a last-resort fallback.
+// Files are named like masters-2026-field.json, pga-2026-field.json, etc.
+function loadHardcodedMajorField(tournament) {
+  const major = majorParamFromTournamentName(tournament?.name || "");
+  if (!major) return null;
+  const year = String(tournament?.start_date || "").slice(0, 4) || String(new Date().getUTCFullYear());
+  const path = require("path");
+  const fs = require("fs");
+  const filePath = path.join(__dirname, "data", `${major}-${year}-field.json`);
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const data = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const players = (data?.players || [])
+      .map((p) => ({
+        name: p.name || "",
+        country: p.country || null,
+        world_rank: p.world_rank || null,
+      }))
+      .filter((p) => p.name);
+    return players.length >= 50 ? players : null;
+  } catch {
+    return null;
+  }
+}
+
 function majorExpectedCountRange(major) {
   // Use broad but realistic bounds so we never import garbage lists.
   if (major === "masters") return { min: 60, max: 110 };
@@ -1431,6 +1456,18 @@ async function fetchDataGolfFieldPlayers(tournament) {
       provider: majorFallback.provider,
       url: null,
       urlsTried: [...urlsTried, ...(majorFallback.urlsTried || [])],
+      event_id: null,
+    };
+  }
+
+  // Final fallback: use a hardcoded confirmed field for major tournaments when all API/scrape attempts fail.
+  const hardcodedField = loadHardcodedMajorField(tournament);
+  if (hardcodedField?.length) {
+    return {
+      players: hardcodedField,
+      provider: "hardcoded-major-field",
+      url: null,
+      urlsTried,
       event_id: null,
     };
   }
