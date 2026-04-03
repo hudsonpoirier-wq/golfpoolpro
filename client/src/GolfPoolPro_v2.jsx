@@ -1577,6 +1577,9 @@ export default function GolfPoolPro() {
           status: p.status || "lobby",
           tournamentId: p.tournament?.id || p.tournament_id || "",
           tournamentName: p.tournament?.name || "",
+          tournamentVenue: p.tournament?.venue || "",
+          tournamentDate: p.tournament?.start_date ? fmtTDate(p.tournament.start_date) : "",
+          tournamentStartDate: p.tournament?.start_date || null,
           participants: Number(p.participants || 0),
           maxParticipants: Number(p.max_participants || p.maxParticipants || 8),
           teamSize: Number(p.team_size || p.teamSize || 4),
@@ -1599,6 +1602,16 @@ export default function GolfPoolPro() {
           created: p.created_at ? new Date(p.created_at).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"}),
         }));
         setPools(mapped);
+        // Backfill tournaments list with any pool tournaments not already loaded (e.g. completed events)
+        setTournaments(prev => {
+          const ids = new Set(prev.map(t=>t.id));
+          const extras = (resp?.pools || [])
+            .filter(p => p.tournament?.id && !ids.has(p.tournament.id))
+            .map(p => p.tournament)
+            .filter((t, i, arr) => arr.findIndex(x=>x.id===t.id) === i)
+            .map(t => ({ id:t.id, name:t.name, venue:t.venue||"TBD", start_date:t.start_date||null, end_date:t.end_date||null, date:fmtTDate(t.start_date), purse:t.purse?`$${Number(t.purse).toLocaleString()}`:"TBD", field:Number(t.field_size||t.field)||null }));
+          return extras.length ? [...prev, ...extras] : prev;
+        });
       } catch {}
     };
     pullPools();
@@ -2327,6 +2340,40 @@ export default function GolfPoolPro() {
       setAuthEmail(email);
       ensureParticipant({ id:user.id, name:user.name || email.split("@")[0], email:user.email || email, avatar:user.avatar || (user.name||"U").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase() });
       setAuthError("");
+      // Eagerly fetch pools + tournaments in parallel so home screen loads instantly
+      const eagerFetch = async () => {
+        try {
+          const [poolResp, tResp] = await Promise.all([
+            Pools.list(),
+            fetch(`${API_BASE}/api/tournaments/future`).then(r=>r.json()),
+          ]);
+          const nowMs = Date.now();
+          const mappedPools = (poolResp?.pools || []).map((p) => ({
+            _tournamentStarted: (() => { const iso = p.tournament?.start_date; if (!iso) return false; const d = new Date(iso); return !Number.isNaN(d.getTime()) && nowMs >= d.getTime(); })(),
+            id: p.id, name: p.name, status: p.status || "lobby",
+            tournamentId: p.tournament?.id || p.tournament_id || "",
+            tournamentName: p.tournament?.name || "",
+            tournamentVenue: p.tournament?.venue || "",
+            tournamentDate: p.tournament?.start_date ? fmtTDate(p.tournament.start_date) : "",
+            tournamentStartDate: p.tournament?.start_date || null,
+            participants: Number(p.participants || 0),
+            maxParticipants: Number(p.max_participants || p.maxParticipants || 8),
+            teamSize: Number(p.team_size || p.teamSize || 4),
+            scoringGolfers: Number(p.scoring_golfers || p.scoringGolfers || 2),
+            cutLine: Number(p.cut_line || p.cutLine || 2),
+            shotClock: Number(p.shot_clock || p.shotClock || 60),
+            draftOrderType: p.draft_order_type || p.draftOrderType || "ordered",
+            invite_token: p.invite_token || null, hostId: p.host_id || null,
+            yourRank: p.yourRank ?? null,
+            yourScore: (() => { const iso = p.tournament?.start_date; if (!iso) return null; const d = new Date(iso); if (Number.isNaN(d.getTime()) || nowMs < d.getTime()) return null; return p.yourScore ?? null; })(),
+            created: p.created_at ? new Date(p.created_at).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"}),
+          }));
+          setPools(mappedPools);
+          const mappedT = (tResp.tournaments||[]).map(t=>({ id:t.id, name:t.name, venue:t.venue||"TBD", start_date:t.start_date||null, end_date:t.end_date||null, date:fmtTDate(t.start_date||t.startDate), purse:t.purse?`$${Number(t.purse).toLocaleString()}`:"TBD", field:Number(t.field_size||t.field)||null }));
+          setTournaments(mappedT);
+        } catch {}
+      };
+      eagerFetch();
       if(invitePool){
         setAuthMode("join");
         setInviteView(true);
@@ -3086,8 +3133,11 @@ export default function GolfPoolPro() {
 	              <div className="g3" style={{marginBottom:40}}>
 	                {pools.map(pool=>{
 	                  const t = tournaments.find(x=>x.id===pool.tournamentId);
+	                  const tName = t?.name || pool.tournamentName || "—";
+	                  const tVenue = t?.venue || pool.tournamentVenue || "";
+	                  const tDate = t?.date || pool.tournamentDate || "";
 	                  const started = (() => {
-	                    const iso = t?.start_date;
+	                    const iso = t?.start_date || pool.tournamentStartDate;
 	                    if (!iso) return false;
 	                    const d = new Date(iso);
 	                    if (Number.isNaN(d.getTime())) return false;
@@ -3103,8 +3153,8 @@ export default function GolfPoolPro() {
 	                          {displayStatus==="drafted" ? "Drafted" : (displayStatus.charAt(0).toUpperCase()+displayStatus.slice(1))}
 	                        </span>
 	                      </div>
-	                      <p style={{fontSize:13,fontWeight:600,color:"var(--forest)",marginBottom:4}}>{t?.name||"—"}</p>
-	                      <p style={{fontSize:12,color:"var(--muted)",marginBottom:16}}>{t?.venue} · {t?.date}</p>
+	                      <p style={{fontSize:13,fontWeight:600,color:"var(--forest)",marginBottom:4}}>{tName}</p>
+	                      <p style={{fontSize:12,color:"var(--muted)",marginBottom:16}}>{tVenue}{tVenue && tDate ? " · " : ""}{tDate}</p>
                       <div style={{display:"flex",gap:10,marginBottom:14}}>
                         {[
                           [pool.participants+"/"+pool.maxParticipants,"Players"],

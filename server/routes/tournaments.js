@@ -12,11 +12,12 @@ router.get("/future", async (_req, res, next) => {
     const today = new Date().toISOString().slice(0, 10);
     const minRows = Number(process.env.MIN_TOURNAMENT_ROWS || 12);
 
-    // Return active tournaments (in progress) + upcoming tournaments (future start_date)
+    // Return active + upcoming + recently completed tournaments (so old pools can still display)
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const query = () => sb
       .from("tournaments")
       .select("id, name, venue, start_date, end_date, purse, field_size, status")
-      .or(`start_date.gte.${today},status.eq.active`)
+      .or(`start_date.gte.${today},status.eq.active,and(status.eq.complete,end_date.gte.${thirtyDaysAgo})`)
       .order("start_date", { ascending: true });
     let { data, error } = await query();
     if (error) return res.status(500).json({ error: error.message });
