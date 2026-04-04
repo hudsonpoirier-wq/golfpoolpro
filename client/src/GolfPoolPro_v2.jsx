@@ -23,7 +23,8 @@ const CSS = `
   --sh-lg:0 16px 48px rgba(27,67,50,.13),0 4px 12px rgba(27,67,50,.05);
   --r:16px;--r-sm:10px;
 }
-html,body{background:var(--cream);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;-webkit-text-size-adjust:100%}
+html,body{background:var(--cream);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;-webkit-text-size-adjust:100%;overflow-x:hidden}
+#root{overflow-x:hidden;max-width:100vw}
 ::-webkit-scrollbar{width:5px;height:5px}
 ::-webkit-scrollbar-track{background:var(--cream-2)}
 ::-webkit-scrollbar-thumb{background:var(--parchment);border-radius:3px}
@@ -42,6 +43,7 @@ html,body{background:var(--cream);color:var(--text);font-family:'DM Sans',sans-s
 .nav-user span{font-size:12px;font-weight:600;color:rgba(255,255,255,.7)}
 .live-dot{width:7px;height:7px;border-radius:50%;background:var(--red);display:inline-block;margin-right:5px;animation:blink 1.4s ease infinite;flex-shrink:0}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
 
 /* CARDS */
 .card{background:#fff;border-radius:var(--r);box-shadow:var(--sh);border:1px solid rgba(27,67,50,.055);padding:24px}
@@ -83,6 +85,7 @@ select.inp{cursor:pointer}
 .bg-green{background:#DCFCE7;color:var(--green)}
 .bg-blue{background:#DBEAFE;color:var(--blue)}
 .bg-gray{background:var(--cream-2);color:var(--muted)}
+.bg-complete{background:rgba(22,163,74,.1);color:#16A34A}
 
 /* GRID */
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
@@ -870,26 +873,46 @@ const calcWinProb = (participants, getTeamFn, liveScoresList, scoringCount, cutL
     if (validScores.length === 0) break;
 
     const minScore = Math.min(...validScores);
-    // Combined softmax: score + momentum + position + cut risk penalty
-    const exps = cumScores.map((s, i) => {
-      if (teamInfo[i].eliminated) return 0;
-      if (s === null) return 0.001;
-      let logit = -alpha * (s - minScore); // base: score gap
-      logit += momentumFactors[i];          // hot/cold streak
-      logit += positionFactors[i];          // leaderboard position
-      if (teamInfo[i].atCutRisk) logit -= 0.3 * (1 + ri); // cut risk penalty (grows each round)
-      return Math.exp(logit);
-    });
-    const total = exps.reduce((a, b) => a + b, 0);
-    const probs = exps.map(e => total > 0 ? Math.round((e / total) * 100) : 0);
-    // Adjust so they sum to 100
-    const probSum = probs.reduce((a, b) => a + b, 0);
-    if (probSum > 0 && probSum !== 100) {
-      const firstActive = probs.findIndex((_, i) => !teamInfo[i].eliminated);
-      if (firstActive >= 0) probs[firstActive] += 100 - probSum;
-    }
 
-    rows.push({ r: roundKeys[ri], ...Object.fromEntries(names.map((n, i) => [n, probs[i]])) });
+    // After the final round with data (R4 or last played round at tournament end),
+    // set the winner to 100% and everyone else to 0%
+    const isFinalRound = ri === maxRound - 1 && maxRound === 4;
+    if (isFinalRound) {
+      // Find the winner(s) — lowest cumulative score
+      const probs = cumScores.map((s, i) => {
+        if (teamInfo[i].eliminated || s === null) return 0;
+        return s === minScore ? 1 : 0;
+      });
+      const winnerCount = probs.filter(p => p === 1).length;
+      const finalProbs = probs.map(p => p === 1 ? Math.round(100 / winnerCount) : 0);
+      // Fix rounding so it sums to 100
+      const sum = finalProbs.reduce((a, b) => a + b, 0);
+      if (sum > 0 && sum !== 100) {
+        const first = finalProbs.findIndex(p => p > 0);
+        if (first >= 0) finalProbs[first] += 100 - sum;
+      }
+      rows.push({ r: roundKeys[ri], ...Object.fromEntries(names.map((n, i) => [n, finalProbs[i]])) });
+    } else {
+      // Combined softmax: score + momentum + position + cut risk penalty
+      const exps = cumScores.map((s, i) => {
+        if (teamInfo[i].eliminated) return 0;
+        if (s === null) return 0.001;
+        let logit = -alpha * (s - minScore); // base: score gap
+        logit += momentumFactors[i];          // hot/cold streak
+        logit += positionFactors[i];          // leaderboard position
+        if (teamInfo[i].atCutRisk) logit -= 0.3 * (1 + ri); // cut risk penalty (grows each round)
+        return Math.exp(logit);
+      });
+      const total = exps.reduce((a, b) => a + b, 0);
+      const probs = exps.map(e => total > 0 ? Math.round((e / total) * 100) : 0);
+      // Adjust so they sum to 100
+      const probSum = probs.reduce((a, b) => a + b, 0);
+      if (probSum > 0 && probSum !== 100) {
+        const firstActive = probs.findIndex((_, i) => !teamInfo[i].eliminated);
+        if (firstActive >= 0) probs[firstActive] += 100 - probSum;
+      }
+      rows.push({ r: roundKeys[ri], ...Object.fromEntries(names.map((n, i) => [n, probs[i]])) });
+    }
   }
 
   return { data: rows, names };
@@ -1059,6 +1082,7 @@ export default function GolfPoolPro() {
   const [statsTab,setStatsTab] = useState("overview");
   const [statsPlayer,setStatsPlayer] = useState(null);
   const [pools,setPools] = useState(()=> LS.get("mgpp_pools", []));
+  const [poolsLoading,setPoolsLoading] = useState(false);
   const [currentUser,setCurrentUser] = useState(()=> LS.get("mgpp_session", null));
   const [accounts,setAccounts] = useState(()=> initAccounts());
   const [tournaments,setTournaments] = useState([]);
@@ -1558,6 +1582,7 @@ export default function GolfPoolPro() {
   useEffect(() => {
     if (!apiToken.get()) return;
     let cancelled = false;
+    setPoolsLoading(true);
     const pullPools = async () => {
       try {
         const resp = await Pools.list();
@@ -1613,6 +1638,7 @@ export default function GolfPoolPro() {
           return extras.length ? [...prev, ...extras] : prev;
         });
       } catch {}
+      if (!cancelled) setPoolsLoading(false);
     };
     pullPools();
     return () => { cancelled = true; };
@@ -2341,6 +2367,7 @@ export default function GolfPoolPro() {
       ensureParticipant({ id:user.id, name:user.name || email.split("@")[0], email:user.email || email, avatar:user.avatar || (user.name||"U").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase() });
       setAuthError("");
       // Eagerly fetch pools + tournaments in parallel so home screen loads instantly
+      setPoolsLoading(true);
       const eagerFetch = async () => {
         try {
           const [poolResp, tResp] = await Promise.all([
@@ -2369,9 +2396,10 @@ export default function GolfPoolPro() {
             created: p.created_at ? new Date(p.created_at).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"}),
           }));
           setPools(mappedPools);
+          setPoolsLoading(false);
           const mappedT = (tResp.tournaments||[]).map(t=>({ id:t.id, name:t.name, venue:t.venue||"TBD", start_date:t.start_date||null, end_date:t.end_date||null, date:fmtTDate(t.start_date||t.startDate), purse:t.purse?`$${Number(t.purse).toLocaleString()}`:"TBD", field:Number(t.field_size||t.field)||null }));
           setTournaments(mappedT);
-        } catch {}
+        } catch { setPoolsLoading(false); }
       };
       eagerFetch();
       if(invitePool){
@@ -3131,6 +3159,16 @@ export default function GolfPoolPro() {
                 <button className="btn btn-prim" onClick={()=>setView("create-pool")}>+ New Pool</button>
               </div>
 	              <div className="g3" style={{marginBottom:40}}>
+	                {poolsLoading && !pools.length && [1,2,3].map(i=>(
+	                  <div key={i} className="pool-card" style={{minHeight:200,animation:"pulse 1.5s ease infinite"}}>
+	                    <div style={{height:18,width:"60%",background:"var(--cream-2)",borderRadius:6,marginBottom:14}}/>
+	                    <div style={{height:14,width:"80%",background:"var(--cream-2)",borderRadius:6,marginBottom:8}}/>
+	                    <div style={{height:12,width:"50%",background:"var(--cream-2)",borderRadius:6,marginBottom:20}}/>
+	                    <div style={{display:"flex",gap:10}}>
+	                      {[1,2,3].map(j=><div key={j} style={{flex:1,height:44,background:"var(--cream-2)",borderRadius:8}}/>)}
+	                    </div>
+	                  </div>
+	                ))}
 	                {pools.map(pool=>{
 	                  const t = tournaments.find(x=>x.id===pool.tournamentId);
 	                  const tName = t?.name || pool.tournamentName || "—";
@@ -3148,9 +3186,9 @@ export default function GolfPoolPro() {
 	                    <div key={pool.id} className={`pool-card ${pool.status}`} onClick={()=>openPool(pool)}>
 	                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
 	                        <h3 className="h4">{pool.name}</h3>
-	                        <span className={`badge ${displayStatus==="live"?"bg-red":displayStatus==="lobby"?"bg-gold":displayStatus==="complete"?"bg-gray":"bg-forest"}`}>
+	                        <span className={`badge ${displayStatus==="live"?"bg-red":displayStatus==="lobby"?"bg-gold":displayStatus==="complete"?"bg-complete":"bg-forest"}`}>
 	                          {displayStatus==="live"&&<span className="live-dot"/>}
-	                          {displayStatus==="drafted" ? "Drafted" : (displayStatus.charAt(0).toUpperCase()+displayStatus.slice(1))}
+	                          {displayStatus==="complete" ? "\u2713 Completed" : displayStatus==="drafted" ? "Drafted" : (displayStatus.charAt(0).toUpperCase()+displayStatus.slice(1))}
 	                        </span>
 	                      </div>
 	                      <p style={{fontSize:13,fontWeight:600,color:"var(--forest)",marginBottom:4}}>{tName}</p>
@@ -3233,8 +3271,8 @@ export default function GolfPoolPro() {
 	                      return Date.now() >= d.getTime();
 	                    })();
 	                    const displayStatus = (activePool.status === "live" && !started) ? "drafted" : activePool.status;
-	                    const showLabel = poolPhase==="draft" ? "Drafting" : (displayStatus==="drafted" ? "Drafted" : (displayStatus.charAt(0).toUpperCase()+displayStatus.slice(1)));
-	                    const cls = displayStatus==="live" ? "bg-red" : displayStatus==="lobby" ? "bg-gold" : displayStatus==="drafted" ? "bg-forest" : "bg-gray";
+	                    const showLabel = poolPhase==="draft" ? "Drafting" : displayStatus==="complete" ? "\u2713 Completed" : (displayStatus==="drafted" ? "Drafted" : (displayStatus.charAt(0).toUpperCase()+displayStatus.slice(1)));
+	                    const cls = displayStatus==="live" ? "bg-red" : displayStatus==="lobby" ? "bg-gold" : displayStatus==="complete" ? "bg-complete" : displayStatus==="drafted" ? "bg-forest" : "bg-gray";
 	                    return (
 	                      <span className={`badge ${cls}`}>
 	                        {displayStatus==="live"&&<span className="live-dot"/>}
@@ -4358,17 +4396,21 @@ export default function GolfPoolPro() {
                                   <ResponsiveContainer width="100%" height={240}>
                                     <BarChart data={(() => {
                                       const buckets = {"Top 10":0,"11-25":0,"26-50":0,"51+":0,"CUT/WD":0};
+                                      // Determine which rounds have started (at least one golfer has data)
+                                      const roundsPlayed = ["R1","R2","R3","R4"].filter(rk => liveScores.some(s => typeof s[rk] === "number")).length;
+                                      const cutHappened = roundsPlayed >= 3; // cut typically after R2, so R3+ data means cut applied
                                       liveScores.forEach(s => {
-                                        const p = s.pos;
-                                        if (!p || p === "CUT" || p === "WD" || p === "DQ" || p === "MDF") buckets["CUT/WD"]++;
-                                        else {
-                                          const n = parseInt(String(p).replace("T",""),10);
-                                          if (isNaN(n)) buckets["CUT/WD"]++;
-                                          else if (n <= 10) buckets["Top 10"]++;
-                                          else if (n <= 25) buckets["11-25"]++;
-                                          else if (n <= 50) buckets["26-50"]++;
-                                          else buckets["51+"]++;
-                                        }
+                                        const p = String(s.pos || "").trim().toUpperCase();
+                                        // Explicit cut/withdrawal statuses
+                                        if (p === "CUT" || p === "WD" || p === "DQ" || p === "MDF") { buckets["CUT/WD"]++; return; }
+                                        // If cut happened and golfer has no R3/R4 data, they missed the cut
+                                        if (cutHappened && typeof s.R3 !== "number" && typeof s.R4 !== "number" && typeof s.R1 === "number") { buckets["CUT/WD"]++; return; }
+                                        const n = parseInt(p.replace("T",""),10);
+                                        if (!p || isNaN(n)) { buckets["CUT/WD"]++; return; }
+                                        if (n <= 10) buckets["Top 10"]++;
+                                        else if (n <= 25) buckets["11-25"]++;
+                                        else if (n <= 50) buckets["26-50"]++;
+                                        else buckets["51+"]++;
                                       });
                                       return Object.entries(buckets).map(([range,count]) => ({range,count}));
                                     })()} margin={{top:0,right:10,bottom:0,left:0}}>
@@ -4644,7 +4686,13 @@ export default function GolfPoolPro() {
 
                               {/* Top 10 Leaderboard Mini */}
                               {(()=>{
-                                const sorted=[...liveScores].map(s=>{const g=findGolferById(s.gId);return g?{name:g.name.split(" ").pop(),tot:sumRounds(s),isTeam:myTeam.some(t=>t.id===s.gId)}:null;}).filter(s=>s&&s.tot!==null).sort((a,b)=>a.tot-b.tot).slice(0,10);
+                                const allSorted=[...liveScores].map(s=>{const g=findGolferById(s.gId);return g?{name:g.name.split(" ").pop(),tot:sumRounds(s),isTeam:myTeam.some(t=>t.id===s.gId)}:null;}).filter(s=>s&&s.tot!==null).sort((a,b)=>a.tot-b.tot);
+                                // Show exactly 10 golfers: include all ties at the 10th position cutoff
+                                const sorted = allSorted.length <= 10 ? allSorted : (() => {
+                                  const cutoffScore = allSorted[9].tot;
+                                  const top = allSorted.filter(s => s.tot <= cutoffScore);
+                                  return top.slice(0, 10); // cap at 10 even with ties
+                                })();
                                 if(sorted.length<3) return null;
                                 return (
                                   <div className="card" style={{marginTop:0}}>
