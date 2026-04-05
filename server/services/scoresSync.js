@@ -300,6 +300,25 @@ function normalizeName(v) {
     .trim();
 }
 
+/**
+ * Flexible name matching for tournaments. Handles cases like:
+ * "Masters Tournament" vs "The Masters", "US Open" vs "U.S. Open",
+ * "PGA Championship" vs "PGA Championship 2026"
+ */
+function namesMatch(a, b) {
+  if (!a || !b) return false;
+  // Direct substring match (original logic)
+  if (a.includes(b) || b.includes(a)) return true;
+  // Extract key words (3+ chars) and check overlap
+  const wordsA = a.split(" ").filter(w => w.length >= 3);
+  const wordsB = b.split(" ").filter(w => w.length >= 3);
+  if (!wordsA.length || !wordsB.length) return false;
+  const matchCount = wordsA.filter(w => wordsB.some(wb => wb.includes(w) || w.includes(wb))).length;
+  // Match if majority of shorter name's words appear in the other
+  const minWords = Math.min(wordsA.length, wordsB.length);
+  return matchCount >= Math.max(1, Math.ceil(minWords * 0.6));
+}
+
 function dateDistanceDays(a, b) {
   if (!a || !b) return 3650;
   const da = new Date(a);
@@ -712,8 +731,8 @@ async function fetchDataGolfLiveScores(internalTournamentId, supabase) {
       const json = await dgSyncFetchJson(inPlayUrl);
       if (!json) continue;
       const eventName = normalizeName(json.event_name || json.info?.event_name || "");
-      // STRICT name matching — both must exist and match
-      if (!eventName || (!eventName.includes(tournamentName) && !tournamentName.includes(eventName))) {
+      // Flexible name matching — handles "Masters Tournament" vs "The Masters", etc.
+      if (!eventName || !namesMatch(eventName, tournamentName)) {
         continue;
       }
       // Extract course par from the API response, or auto-detect from player data
@@ -765,7 +784,7 @@ async function fetchDataGolfLiveScores(internalTournamentId, supabase) {
       const json = await dgSyncFetchJson(fieldUrl);
       if (!json) continue;
       const eventName = normalizeName(json.event_name || "");
-      if (!eventName || (!eventName.includes(tournamentName) && !tournamentName.includes(eventName))) {
+      if (!eventName || !namesMatch(eventName, tournamentName)) {
         continue;
       }
       const coursePar = Number(json.course_par ?? json.par ?? 72) || 72;
