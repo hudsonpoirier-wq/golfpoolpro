@@ -3944,7 +3944,7 @@ export default function GolfPoolPro() {
                   const rounds = ls ? [ls.R1, ls.R2, ls.R3, ls.R4] : [null, null, null, null];
                   const playedRounds = rounds.filter((v) => v !== null && v !== undefined).length;
                   const playedSum = rounds.filter((v) => v !== null && v !== undefined).reduce((a, b) => a + b, 0);
-                  const tot = ls ? (ls.R1 + ls.R2 + ls.R3 + ls.R4) : null;
+                  const tot = ls ? sumRounds(ls) : null;
                   const birdies = ls?.birdies ? ls.birdies.reduce((a, b) => a + b, 0) : 0;
                   const eagles = ls?.eagles ? ls.eagles.reduce((a, b) => a + b, 0) : 0;
                   return { g, ls, tot, playedRounds, playedSum, birdies, eagles };
@@ -4039,16 +4039,16 @@ export default function GolfPoolPro() {
                     </div>
 	                    {[...liveScores]
 	                      .map(s=>({...s,tot:sumRounds(s)}))
-	                      .sort((a,b)=>(a.tot??999999999)-(b.tot??999999999))
-	                      .map((s,idx)=>{
+	                      .sort((a,b)=>(a.pos??999)-(b.pos??999)||(a.tot??999999999)-(b.tot??999999999))
+	                      .map((s)=>{
                         const g=findGolferById(s.gId);
                         if(!g) return null;
                         const isInPool = draftedGolferIds.has(g.id);
-                        const pos = idx+1;
+                        const pos = s.pos ?? 999;
                         return (
                           <div key={s.gId} className="lb-row" style={{gridTemplateColumns:"36px 1fr minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(44px,60px)",cursor:"pointer",background:isInPool?"rgba(27,67,50,.04)":"transparent"}}
                             onClick={()=>{setPoolStatsPlayer(g);setPoolTab("stats");setPoolStatsTab("player");}}>
-                            <div style={{width:26,height:26,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,background:pos===1?"var(--gold-pale)":pos===2?"#E2E8F0":pos===3?"#FEE2CC":isInPool?"rgba(27,67,50,.08)":"var(--cream-2)",color:pos<=3?["#7A5C00","#475569","#9A3412"][pos-1]:isInPool?"var(--forest)":"var(--muted)"}}>{pos}</div>
+                            <div style={{width:26,height:26,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:pos>=100?9:11,fontWeight:700,background:pos===1?"var(--gold-pale)":pos===2?"#E2E8F0":pos===3?"#FEE2CC":isInPool?"rgba(27,67,50,.08)":"var(--cream-2)",color:pos<=3?["#7A5C00","#475569","#9A3412"][pos-1]:isInPool?"var(--forest)":"var(--muted)"}}>{pos}</div>
                             <div style={{minWidth:0}}>
                               <p style={{fontWeight:isInPool?700:600,fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.country} {g.name}{isInPool&&<span style={{marginLeft:6,fontSize:10,background:"var(--gold-pale)",color:"#7A5C00",padding:"1px 5px",borderRadius:3,fontWeight:700}}>IN POOL</span>}</p>
                               <p style={{fontSize:11,color:"var(--muted)"}}>#{g.rank}{s.tee_time ? ` · Tee: ${s.tee_time}` : ""}</p>
@@ -5605,13 +5605,13 @@ export default function GolfPoolPro() {
                 <div className="lb-row lb-hdr" style={{gridTemplateColumns:"36px 1fr minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(44px,60px)"}}>
                   <span>Pos</span><span>Player</span><span style={{textAlign:"right"}}>R1</span><span style={{textAlign:"right"}}>R2</span><span style={{textAlign:"right"}}>R3</span><span style={{textAlign:"right"}}>R4</span><span style={{textAlign:"right"}}>Total</span>
                 </div>
-                {liveScores.map(s=>{
+                {[...liveScores].sort((a,b)=>(a.pos??999)-(b.pos??999)).map(s=>{
                   const g=findGolferById(s.gId);
                   if(!g) return null;
-                  const tot=s.R1+s.R2+s.R3+s.R4;
+                  const tot=sumRounds(s);
                   return (
                     <div key={s.gId} className="lb-row" style={{gridTemplateColumns:"36px 1fr minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(36px,50px) minmax(44px,60px)",cursor:"pointer"}} onClick={()=>{setStatsPlayer(g);setView("stats");setStatsTab("player")}}>
-                      <div style={{width:26,height:26,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,background:s.pos===1?"var(--gold-pale)":s.pos===2?"#E2E8F0":s.pos===3?"#FEE2CC":"var(--cream-2)",color:s.pos<=3?["#7A5C00","#475569","#9A3412"][s.pos-1]:"var(--muted)"}}>{s.pos}</div>
+                      <div style={{width:26,height:26,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:s.pos>=100?9:12,fontWeight:700,background:s.pos===1?"var(--gold-pale)":s.pos===2?"#E2E8F0":s.pos===3?"#FEE2CC":"var(--cream-2)",color:s.pos<=3?["#7A5C00","#475569","#9A3412"][s.pos-1]:"var(--muted)"}}>{s.pos}</div>
                       <div>
                         <p style={{fontWeight:600,fontSize:14}}>{g.country} {g.name}</p>
                         <p style={{fontSize:11,color:"var(--muted)"}}>#{g.rank}</p>

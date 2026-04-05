@@ -600,6 +600,21 @@ function normalizeDataGolfScoreRow(raw, coursePar) {
     }
   }
 
+  // Cross-validate: if we have a cumulative to-par from the API, ensure per-round
+  // scores sum to match it. If they don't, redistribute the difference to the
+  // current round (most likely source of discrepancy during live play).
+  if (Number.isFinite(currentScore)) {
+    const roundSum = [r1, r2, r3, r4].reduce((s, v) => s + (Number.isFinite(v) ? v : 0), 0);
+    const diff = currentScore - roundSum;
+    if (diff !== 0) {
+      // Adjust the latest non-null round to reconcile
+      if (r4 != null) r4 += diff;
+      else if (r3 != null) r3 += diff;
+      else if (r2 != null) r2 += diff;
+      else if (r1 != null) r1 += diff;
+    }
+  }
+
   // Status mapping: active / cut / wd
   const statusRaw = String(raw.status ?? raw.fin_text ?? raw.current_pos ?? "").toLowerCase();
   let status = "active";
