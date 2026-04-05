@@ -102,16 +102,33 @@ async function syncLiveScores(supabase) {
     }
   }
 
-  // Auto-complete tournaments whose end_date has passed
+  // Auto-complete tournaments whose end_date has passed.
+  // Also catch tournaments with NULL end_date by falling back to start_date + 3 days.
   const { data: expiredActive } = await supabase
     .from("tournaments")
-    .select("id, name, end_date")
+    .select("id, name, start_date, end_date")
     .eq("status", "active")
-    .lt("end_date", today);
+    .or(`end_date.lt.${today},and(end_date.is.null,start_date.lt.${new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)})`);
   if (expiredActive?.length) {
+    const completedIds = [];
     for (const t of expiredActive) {
       await supabase.from("tournaments").update({ status: "complete" }).eq("id", t.id);
+      completedIds.push(t.id);
       console.log(`Auto-completed tournament: ${t.name} (${t.id})`);
+    }
+    // Also mark any live pools tied to these tournaments as complete
+    if (completedIds.length) {
+      const { data: livePools } = await supabase
+        .from("pools")
+        .select("id, tournament_id")
+        .eq("status", "live")
+        .in("tournament_id", completedIds);
+      if (livePools?.length) {
+        for (const p of livePools) {
+          await supabase.from("pools").update({ status: "complete" }).eq("id", p.id);
+          console.log(`Auto-completed pool ${p.id} (tournament ${p.tournament_id} ended)`);
+        }
+      }
     }
   }
 

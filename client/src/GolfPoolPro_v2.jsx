@@ -1397,6 +1397,7 @@ export default function GolfPoolPro() {
           venue: t.venue || "TBD",
           start_date: t.start_date || t.startDate || null,
           end_date: t.end_date || t.endDate || null,
+          status: t.status || null,
           date: fmtTDate(t.start_date || t.startDate),
           purse: t.purse ? `$${Number(t.purse).toLocaleString()}` : "TBD",
           field: Number(t.field_size || t.field) || null
@@ -5091,7 +5092,7 @@ export default function GolfPoolPro() {
                     <label className="label">Tournament</label>
                     <select className="inp" value={config.tournament} onChange={e=>setConfig(c=>({...c,tournament:e.target.value}))}>
                       <option value="">— Select Future Tournament —</option>
-                      {tournaments.map(t=><option key={t.id} value={t.id}>{t.name} · {t.date}</option>)}
+                      {tournaments.filter(t=>t.status!=="complete").map(t=><option key={t.id} value={t.id}>{t.name} · {t.date}</option>)}
                     </select>
                   </div>
                   {config.tournament && (()=>{
