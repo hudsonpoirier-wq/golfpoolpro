@@ -944,7 +944,7 @@ async function seedGolfers(supabase) {
     for (const r of ranks) {
       const id = Number(r?.dg_id ?? r?.dgid ?? r?.datagolf_id ?? r?.player_id ?? r?.id);
       if (!Number.isFinite(id) || id <= 0) continue;
-      const owgr = Number(r?.owgr_rank ?? r?.owgr ?? r?.world_rank ?? r?.rank ?? r?.owgrRank);
+      const owgr = Number(r?.owgr_rank ?? r?.owgr ?? r?.world_rank ?? r?.owgrRank);
       const sk = skillMap.get(id) || {};
 
       rankMap.set(id, {

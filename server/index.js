@@ -629,7 +629,7 @@ async function getDataGolfRankingsMap() {
     if (!row || typeof row !== "object") continue;
     const id = Number(row.dg_id ?? row.dgid ?? row.datagolf_id ?? row.player_id ?? row.id);
     if (!Number.isFinite(id) || id <= 0) continue;
-    const worldRank = Number(row.owgr_rank ?? row.owgr ?? row.world_rank ?? row.rank ?? row.owgrRank);
+    const worldRank = Number(row.owgr_rank ?? row.owgr ?? row.world_rank ?? row.owgrRank);
     if (Number.isFinite(worldRank) && worldRank > 0) next.set(id, { world_rank: worldRank });
   }
   if (next.size) {
@@ -1142,7 +1142,7 @@ async function fetchDataGolfFieldPlayers(tournament) {
       id: Number(p.dg_id || p.dgid || p.datagolf_id || p.player_id || p.id) || null,
       name: normalizePlayerName(p.player_name || p.name || p.full_name || p.player || ""),
       country: p.country || p.nationality || null,
-      world_rank: Number(p.owgr || p.owgr_rank || p.world_rank || p.rank) || null,
+      world_rank: Number(p.owgr || p.owgr_rank || p.world_rank) || null,
       sg_total: toNum(p.sg_total ?? p.sg_t ?? p.strokes_gained_total),
       driv_dist: toNum(p.driving_dist ?? p.driv_dist ?? p.avg_distance ?? p.driving_distance),
       driv_acc: toNum(p.driving_acc ?? p.driv_acc ?? p.fairways_hit ?? p.driving_accuracy),
