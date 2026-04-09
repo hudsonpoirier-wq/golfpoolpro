@@ -4169,30 +4169,33 @@ export default function GolfPoolPro() {
                     }
                   }
 
-                  // Also compute round-based data as anchor points
+                  // Compute round-based anchor points (Start, R1, R2, …)
                   const wp = calcWinProb(poolStandings, getPoolTeam, liveScores, sc, activePool?.cutLine||2);
 
-                  // Merge: show round anchors + live timeline
-                  const hasTimeline = winProbHistory.length >= 2;
-                  const chartData = hasTimeline ? winProbHistory.map(h => {
+                  // Merge round anchors + live timeline snapshots
+                  const roundRows = wp.data.map(row => {
+                    const entry = { t: row.r };
+                    participantNames.forEach(n => { entry[n] = row[n] ?? 0; });
+                    return entry;
+                  });
+                  const liveRows = winProbHistory.map(h => {
                     const row = { t: h.t };
                     participantNames.forEach(n => { row[n] = h[n] ?? 0; });
                     return row;
-                  }) : wp.data;
-                  const xKey = hasTimeline ? "t" : "r";
+                  });
+                  const chartData = [...roundRows, ...liveRows];
+                  const xKey = "t";
 
                   return (
                   <div className="card">
                     <h3 className="h3" style={{marginBottom:4}}>Win Probability</h3>
                     <p className="sub" style={{marginBottom:18}}>
-                      {hasTimeline
-                        ? `Live win % · updates every 30s · ${winProbHistory.length} snapshots`
-                        : "Win % after each round based on actual team scores"}
+                      {`Live win % · updates every 30s · ${winProbHistory.length} snapshot${winProbHistory.length!==1?"s":""}`}
                     </p>
                     <ResponsiveContainer width="100%" height={280}>
                       <AreaChart data={chartData}>
                         <CartesianGrid stroke="var(--cream-2)" strokeDasharray="3 3"/>
-                        <XAxis dataKey={xKey} tick={{fontSize:10,fill:"#78716C"}} axisLine={false} tickLine={false} interval={hasTimeline ? Math.max(0, Math.floor(chartData.length / 8) - 1) : 0}/>
+                        <XAxis dataKey={xKey} tick={{fontSize:10,fill:"#78716C"}} axisLine={false} tickLine={false} interval={Math.max(0, Math.floor(chartData.length / 8) - 1)}/>
                         <YAxis tick={{fontSize:11,fill:"#78716C"}} axisLine={false} tickLine={false} unit="%" domain={[0,100]}/>
                         <Tooltip content={({active,payload,label})=>{
                           if(!active||!payload?.length) return null;
@@ -4205,8 +4208,8 @@ export default function GolfPoolPro() {
                             ))}
                           </div>;
                         }}/>
-                        {(hasTimeline ? participantNames : wp.names).map((n,i)=>(
-                          <Area key={n} type="monotone" dataKey={n} stroke={["#1B4332","#C8A94F","#40916C","#7E9B84","#B08968","#6B9BC0"][i%6]} fill="none" strokeWidth={2} dot={hasTimeline ? false : {r:3}} name={n}/>
+                        {participantNames.map((n,i)=>(
+                          <Area key={n} type="monotone" dataKey={n} stroke={["#1B4332","#C8A94F","#40916C","#7E9B84","#B08968","#6B9BC0"][i%6]} fill="none" strokeWidth={2} dot={false} name={n}/>
                         ))}
                       </AreaChart>
                     </ResponsiveContainer>
@@ -4305,7 +4308,7 @@ export default function GolfPoolPro() {
                                     const chartData = myTeam.map(g=>{
                                       const s=liveScores.find(l=>l.gId===g.id);
                                       const tot=s?[s.R1,s.R2,s.R3,s.R4].filter(v=>v!==null&&v!==undefined).reduce((a,b)=>a+b,0):null;
-                                      return {name:g.name.split(" ").pop(),score:tot,displayScore:tot===0?-0.15:tot,fill:tot===null?"#999":tot<0?"#40916C":tot===0?"#C8A94F":"#EF4444"};
+                                      return {name:g.name.split(" ").pop(),score:tot,displayScore:tot===0?-0.15:tot,fill:tot===null?"#999":tot<0?"#40916C":tot===0?"#C8A94F":"#EF4444",tooltipLabel:tot===null?"—":tot>0?`+${tot}`:tot===0?"E":String(tot)};
                                     });
                                     return (
                                     <ResponsiveContainer width="100%" height={220}>
@@ -4313,7 +4316,11 @@ export default function GolfPoolPro() {
                                       <CartesianGrid stroke="var(--cream-2)" vertical={false}/>
                                       <XAxis dataKey="name" tick={{fontSize:10,fill:"#78716C"}} axisLine={false} tickLine={false}/>
                                       <YAxis tick={{fontSize:10,fill:"#78716C"}} axisLine={false} tickLine={false} tickFormatter={v=>v>0?`+${v}`:v===0?"E":v}/>
-                                      <Tooltip content={<CTooltip/>} formatter={(v,name,props)=>{const real=props.payload.score;return [real===null?"—":real>0?`+${real}`:real===0?"E":real,"Score"];}}/>
+                                      <Tooltip content={({active,payload,label})=>{
+                                        if(!active||!payload?.length) return null;
+                                        const d=payload[0]?.payload;
+                                        return <div className="ctt"><p style={{fontWeight:700,marginBottom:5,fontSize:11,color:"#78716C",textTransform:"uppercase",letterSpacing:"0.5px"}}>{label}</p><p>To Par: {d?.tooltipLabel??"—"}</p></div>;
+                                      }}/>
                                       <ReferenceLine y={0} stroke="var(--cream-2)" strokeDasharray="3 3"/>
                                       <Bar dataKey="displayScore" name="To Par" radius={[3,3,0,0]}>
                                         {chartData.map((d,i)=> <Cell key={i} fill={d.fill}/>)}
@@ -4522,9 +4529,9 @@ export default function GolfPoolPro() {
                                       const ls = liveScores.find(l => l.gId === g.id);
                                       const posStr = ls?.pos;
                                       const posNum = posStr ? parseInt(String(posStr).replace(/[^0-9]/g, ''), 10) : null;
-                                      return { name: g.name, pos: isNaN(posNum) ? null : posNum };
+                                      return { name: g.name, pos: (isNaN(posNum) || posNum >= 900) ? null : posNum };
                                     }).filter(p => p.pos !== null);
-                                    if (!teamPositions.length) return <p style={{fontSize:13,color:"var(--muted)",textAlign:"center",padding:20}}>No position data available</p>;
+                                    if (!teamPositions.length) return <p style={{fontSize:13,color:"var(--muted)",textAlign:"center",padding:20}}>No position data available yet</p>;
                                     const best = teamPositions.reduce((a, b) => a.pos < b.pos ? a : b);
                                     const worst = teamPositions.reduce((a, b) => a.pos > b.pos ? a : b);
                                     const avgPos = Math.round(teamPositions.reduce((s, p) => s + p.pos, 0) / teamPositions.length);
